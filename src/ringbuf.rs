@@ -6,7 +6,6 @@
 /// avoiding heap allocation overhead and improving `new()` performance.
 /// 
 /// 此实现使用 FixedVec 在栈上存储小容量数据（≤32），避免堆分配开销，提升 `new()` 性能。
-
 use std::num::NonZero;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -243,6 +242,16 @@ impl<T, const N: usize> Producer<T, N> {
     #[inline]
     pub fn len(&self) -> usize {
         self.slots()
+    }
+
+    /// Check if the buffer is empty
+    /// 
+    /// 检查缓冲区是否为空
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        let write = self.shared.write_idx.load(Ordering::Relaxed);
+        let read = self.shared.read_idx.load(Ordering::Acquire);
+        write == read
     }
     
     /// Get the number of free slots in the buffer

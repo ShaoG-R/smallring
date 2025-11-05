@@ -8,7 +8,6 @@
 /// 
 /// 此类型提供固定容量的向量，当容量 ≤ N 时在栈上存储数据，
 /// 当容量 > N 时在堆上存储数据。与 SmallVec 不同，此类型不支持动态调整大小。
-
 use std::mem::MaybeUninit;
 use std::ops::{Index, IndexMut};
 
