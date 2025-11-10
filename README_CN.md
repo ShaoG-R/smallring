@@ -6,16 +6,18 @@
 
 [English](README.md) | [简体中文](README_CN.md)
 
-高性能的单生产者单消费者（SPSC）无锁环形缓冲区实现，具有自动栈/堆优化能力。
+高性能无锁环形缓冲区实现集合，具有自动栈/堆优化能力。提供 SPSC（单生产者单消费者）和通用环形缓冲区两种实现，适用于不同的使用场景。
 
 ## 特性
 
-- **无锁设计** - 使用原子操作实现线程安全的无锁通信，无需互斥锁
-- **栈/堆优化** - 小容量数据自动存储在栈上，提升性能
-- **高性能** - 针对 SPSC 场景优化，最小化原子操作开销
+- **无锁设计** - 使用原子原语实现线程安全的操作，无需互斥锁
+- **两个互补模块** - SPSC 用于跨线程通信，Generic 用于共享访问与可配置行为
+- **栈/堆优化** - 小缓冲区自动使用栈存储以获得更好的性能
+- **高性能** - 通过最小化原子操作开销和高效的掩码操作进行优化
 - **类型安全** - 完整的 Rust 类型系统保证，编译期检查
 - **零拷贝** - 数据直接移动，无额外拷贝开销
-- **自动清理** - Consumer 被 drop 时自动清理缓冲区中的剩余元素
+- **可配置覆盖** - Generic 模块支持编译期覆盖模式选择
+- **2的幂次容量** - 自动向上取整以实现高效的取模操作
 
 ## 安装
 
@@ -23,16 +25,19 @@
 
 ```toml
 [dependencies]
-smallring = "0.1.0"
+smallring = "0.1"
 ```
 
 ## 快速开始
 
+### SPSC 模块 - 跨线程通信
+
 ```rust
-use smallring::new;
+use smallring::spsc::new;
+use std::num::NonZero;
 
 // 创建一个容量为 8 的环形缓冲区，栈容量阈值为 32
-let (mut producer, mut consumer) = new::<i32, 32>(8);
+let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(8).unwrap());
 
 // 生产者推送数据
 producer.push(42).unwrap();
@@ -43,15 +48,38 @@ assert_eq!(consumer.pop().unwrap(), 42);
 assert_eq!(consumer.pop().unwrap(), 100);
 ```
 
-## 使用示例
-
-### 基础单线程使用
+### Generic 模块 - 具有可配置行为的共享访问
 
 ```rust
-use smallring::new;
+use smallring::generic::RingBuf;
+
+// 覆盖模式：满时自动覆盖最旧的数据
+let buf: RingBuf<i32, 32, true> = RingBuf::new(4);
+buf.push(1); // 返回 None
+buf.push(2);
+buf.push(3);
+buf.push(4);
+buf.push(5); // 返回 Some(1)，覆盖了最旧的元素
+
+// 非覆盖模式：满时拒绝写入
+let buf: RingBuf<i32, 32, false> = RingBuf::new(4);
+buf.push(1).unwrap(); // 返回 Ok(())
+buf.push(2).unwrap();
+buf.push(3).unwrap();
+buf.push(4).unwrap();
+assert!(buf.push(5).is_err()); // 返回 Err(Full(5))
+```
+
+## 使用示例
+
+### 基础单线程使用（SPSC）
+
+```rust
+use smallring::spsc::new;
+use std::num::NonZero;
 
 fn main() {
-    let (mut producer, mut consumer) = new::<String, 64>(16);
+    let (mut producer, mut consumer) = new::<String, 64>(NonZero::new(16).unwrap());
     
     // 推送一些数据
     producer.push("你好".to_string()).unwrap();
@@ -66,14 +94,15 @@ fn main() {
 }
 ```
 
-### 多线程通信
+### 多线程通信（SPSC）
 
 ```rust
-use smallring::new;
+use smallring::spsc::new;
 use std::thread;
+use std::num::NonZero;
 
 fn main() {
-    let (mut producer, mut consumer) = new::<String, 64>(32);
+    let (mut producer, mut consumer) = new::<String, 64>(NonZero::new(32).unwrap());
     
     // 生产者线程
     let producer_handle = thread::spawn(move || {
@@ -108,12 +137,43 @@ fn main() {
 }
 ```
 
-### 错误处理
+### 使用 Generic 模块的共享访问
 
 ```rust
-use smallring::{new, PushError, PopError};
+use smallring::generic::RingBuf;
+use std::sync::Arc;
+use std::thread;
 
-let (mut producer, mut consumer) = new::<i32, 32>(4);
+fn main() {
+    // 覆盖模式对于并发写入者是线程安全的
+    let buf = Arc::new(RingBuf::<u64, 128, true>::new(128));
+    let mut handles = vec![];
+    
+    // 多个写入线程
+    for thread_id in 0..4 {
+        let buf_clone = Arc::clone(&buf);
+        let handle = thread::spawn(move || {
+            for i in 0..100 {
+                let value = (thread_id * 100 + i) as u64;
+                buf_clone.push(value); // 自动覆盖旧数据
+            }
+        });
+        handles.push(handle);
+    }
+    
+    for handle in handles {
+        handle.join().unwrap();
+    }
+}
+```
+
+### 错误处理（SPSC）
+
+```rust
+use smallring::spsc::{new, PushError, PopError};
+use std::num::NonZero;
+
+let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(4).unwrap());
 
 // 填满缓冲区
 for i in 0..4 {
@@ -140,24 +200,103 @@ match consumer.pop() {
 }
 ```
 
-## 栈/堆优化
-
-`smallring` 使用泛型常量 `N` 来控制栈/堆优化的阈值：
+### 批量操作（SPSC）
 
 ```rust
-use smallring::new;
+use smallring::spsc::new;
+use std::num::NonZero;
 
-// 容量 ≤ 32，使用栈存储（更快的初始化，无堆分配）
-let (prod, cons) = new::<u64, 32>(16);
+let (mut producer, mut consumer) = new::<u32, 64>(NonZero::new(32).unwrap());
 
-// 容量 > 32，使用堆存储（适用于更大的缓冲区）
-let (prod, cons) = new::<u64, 32>(64);
+// 一次推送多个元素（需要 T: Copy）
+let data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+let pushed = producer.push_slice(&data);
+assert_eq!(pushed, 10);
 
-// 更大的栈阈值可用于更大的栈存储
-let (prod, cons) = new::<u64, 128>(100);
+// 一次弹出多个元素
+let mut output = [0u32; 5];
+let popped = consumer.pop_slice(&mut output);
+assert_eq!(popped, 5);
+assert_eq!(output, [1, 2, 3, 4, 5]);
 
-// 非常大的缓冲区
-let (prod, cons) = new::<u64, 256>(200);
+// 清空剩余元素
+let remaining: Vec<u32> = consumer.drain().collect();
+assert_eq!(remaining, vec![6, 7, 8, 9, 10]);
+```
+
+### 错误处理（Generic 模块）
+
+```rust
+use smallring::generic::{RingBuf, RingBufError};
+
+// 非覆盖模式
+let buf: RingBuf<i32, 32, false> = RingBuf::new(4);
+
+// 填满缓冲区
+for i in 0..4 {
+    buf.push(i).unwrap();
+}
+
+// 缓冲区已满 - push 返回错误及值
+match buf.push(99) {
+    Err(RingBufError::Full(value)) => {
+        println!("缓冲区已满，无法推送 {}", value);
+    }
+    Ok(_) => {}
+}
+
+// 清空缓冲区
+while buf.pop().is_ok() {}
+
+// 缓冲区为空 - pop 返回错误
+match buf.pop() {
+    Err(RingBufError::Empty) => {
+        println!("缓冲区为空");
+    }
+    Ok(_) => {}
+}
+```
+
+## 在 SPSC 和 Generic 之间选择
+
+| 特性 | SPSC 模块 | Generic 模块 |
+|------|-----------|--------------|
+| 使用场景 | 跨线程通信 | 单线程或共享访问 |
+| 句柄 | 分离的 Producer/Consumer | 共享的 RingBuf |
+| 覆盖行为 | 总是拒绝满时写入 | 编译期可配置 |
+| 缓存优化 | 缓存的读写索引 | 直接原子访问 |
+| Drop 行为 | Consumer 自动清理 | 需手动调用 `clear()` |
+
+**选择 SPSC 当：**
+- 你需要跨线程通信，具有分离的生产者/消费者角色
+- 你希望 Consumer drop 时自动清理
+- 性能至关重要，你可以利用缓存的索引
+
+**选择 Generic 当：**
+- 你需要从单线程或 `Arc` 中进行共享访问
+- 你需要编译期可配置的覆盖行为
+- 你需要多个并发读写者（需适当的同步机制）
+
+## 栈/堆优化
+
+两个模块都使用泛型常量 `N` 来控制栈/堆优化的阈值。当容量 ≤ N 时，数据存储在栈上；否则，在堆上分配。
+
+```rust
+use smallring::spsc::new;
+use smallring::generic::RingBuf;
+use std::num::NonZero;
+
+// SPSC：容量 ≤ 32，使用栈存储（更快的初始化，无堆分配）
+let (prod, cons) = new::<u64, 32>(NonZero::new(16).unwrap());
+
+// SPSC：容量 > 32，使用堆存储（适用于更大的缓冲区）
+let (prod, cons) = new::<u64, 32>(NonZero::new(64).unwrap());
+
+// Generic：更大的栈阈值可用于更大的栈存储
+let buf: RingBuf<u64, 128, true> = RingBuf::new(100);
+
+// Generic：非常大的栈阈值（谨慎使用）
+let buf: RingBuf<u64, 256, false> = RingBuf::new(200);
 ```
 
 **使用指南：**
@@ -168,30 +307,65 @@ let (prod, cons) = new::<u64, 256>(200);
 
 ## API 概览
 
-### 创建环形缓冲区
+### SPSC 模块
 
+**创建环形缓冲区：**
 ```rust
-pub fn new<T, const N: usize>(capacity: usize) -> (Producer<T, N>, Consumer<T, N>)
+pub fn new<T, const N: usize>(capacity: NonZero<usize>) -> (Producer<T, N>, Consumer<T, N>)
 ```
 
-创建指定容量的新环形缓冲区。容量会自动向上取整到下一个 2 的幂次。
+**Producer 方法：**
+- `push(&mut self, value: T) -> Result<(), PushError<T>>` - 推送单个元素
+- `push_slice(&mut self, values: &[T]) -> usize` - 批量推送多个元素（需要 `T: Copy`）
+- `capacity() -> usize` - 获取缓冲区容量
+- `len() / slots() -> usize` - 获取缓冲区中的元素数量
+- `free_slots() -> usize` - 获取可用空间
+- `is_full() -> bool` - 检查缓冲区是否已满
+- `is_empty() -> bool` - 检查缓冲区是否为空
 
-### Producer 方法
+**Consumer 方法：**
+- `pop(&mut self) -> Result<T, PopError>` - 弹出单个元素
+- `pop_slice(&mut self, dest: &mut [T]) -> usize` - 批量弹出多个元素（需要 `T: Copy`）
+- `peek(&self) -> Option<&T>` - 查看第一个元素但不移除
+- `drain(&mut self) -> Drain<'_, T, N>` - 创建消费迭代器
+- `clear(&mut self)` - 移除所有元素
+- `capacity() -> usize` - 获取缓冲区容量
+- `len() / slots() -> usize` - 获取缓冲区中的元素数量
+- `is_empty() -> bool` - 检查缓冲区是否为空
 
-- `push(&mut self, value: T) -> Result<(), PushError<T>>` - 向缓冲区推送一个值
-- 如果缓冲区满则返回 `Err(PushError::Full(value))`
+### Generic 模块
 
-### Consumer 方法
+**创建环形缓冲区：**
+```rust
+pub fn new(capacity: usize) -> RingBuf<T, N, OVERWRITE>
+```
 
-- `pop(&mut self) -> Result<T, PopError>` - 从缓冲区弹出一个值
-- `is_empty(&self) -> bool` - 检查缓冲区是否为空
-- `slots(&self) -> usize` - 获取缓冲区中当前的元素数量
+**RingBuf 方法：**
+- `push(&self, value: T)` - 推送元素（返回类型取决于 `OVERWRITE` 标志）
+  - `OVERWRITE=true`：返回 `Option<T>`（如果覆盖了元素则为 Some）
+  - `OVERWRITE=false`：返回 `Result<(), RingBufError<T>>`
+- `pop(&self) -> Result<T, RingBufError<T>>` - 弹出单个元素
+- `push_slice(&self, values: &[T]) -> usize` - 批量推送多个元素（需要 `T: Copy`）
+- `pop_slice(&self, dest: &mut [T]) -> usize` - 批量弹出多个元素（需要 `T: Copy`）
+- `peek(&self) -> Option<&T>` - 查看第一个元素但不移除
+- `clear(&self)` - 移除所有元素
+- `capacity() -> usize` - 获取缓冲区容量
+- `len() -> usize` - 获取缓冲区中的元素数量
+- `is_empty() -> bool` - 检查缓冲区是否为空
+- `is_full() -> bool` - 检查缓冲区是否已满
 
-## 性能考虑
+## 性能提示
+
+1. **选择合适的容量** - 容量会自动向上取整到 2 的幂次以实现高效的掩码操作。选择 2 的幂次大小可避免浪费空间。
+2. **使用批量操作** - 在处理 `Copy` 类型时，`push_slice` 和 `pop_slice` 比单个操作快得多。
+3. **选择合适的 N** - 对于小缓冲区，栈存储可显著提升性能并消除堆分配开销。常用值：32、64、128。
+4. **在需要时使用 peek** - 避免 pop + 重新 push 的模式。使用 `peek()` 进行非消费性检查。
+5. **SPSC vs Generic** - 对于跨线程通信，使用 SPSC 模块以获得最佳缓存效果。需要共享访问或可配置覆盖行为时使用 Generic 模块。
+6. **避免伪共享** - 在多线程场景中，确保生产者和消费者位于不同的缓存行。
 
 ### 容量选择
 
-容量会自动向上取整到最接近的 2 的幂次以实现高效的掩码操作：
+容量会自动向上取整到最接近的 2 的幂次：
 
 ```rust
 // 请求容量 → 实际容量
@@ -203,53 +377,46 @@ pub fn new<T, const N: usize>(capacity: usize) -> (Producer<T, N>, Consumer<T, N
 
 **建议：** 选择 2 的幂次作为容量以避免空间浪费。
 
-### 批量操作
-
-为获得最大吞吐量，尽可能批量进行 push/pop 操作：
-
-```rust
-// 效率较低 - 多次小规模推送
-for i in 0..1000 {
-    while producer.push(i).is_err() {
-        thread::yield_now();
-    }
-}
-
-// 效率更高 - 当缓冲区有空间时批量处理
-let mut batch = vec![];
-for i in 0..1000 {
-    if let Err(PushError::Full(val)) = producer.push(i) {
-        // 缓冲区满，等待空间
-        thread::yield_now();
-        // 重试这个值
-        while producer.push(val).is_err() {
-            thread::yield_now();
-        }
-    }
-}
-```
-
-### 选择 N（栈阈值）
-
-- **小 N（32）：** 最小的栈使用，适用于大多数情况
-- **中等 N（128）：** 中等大小缓冲区的良好平衡
-- **大 N（256+）：** 适合栈的大缓冲区可获得最大性能
-
-栈分配比堆分配在缓冲区初始化时快得多。
-
 ## 线程安全
 
-- **仅限 SPSC：** `smallring` 专为单生产者单消费者场景设计
+### SPSC 模块
+
+- 专为跨线程的单生产者单消费者场景设计
 - `Producer` 和 `Consumer` **不是** `Sync`，确保单线程访问
 - `Producer` 和 `Consumer` 是 `Send`，允许在线程间移动
 - 原子操作确保生产者和消费者线程之间的内存顺序保证
 
+### Generic 模块
+
+- 当 `T` 是 `Send` 时，`RingBuf` 是 `Send` 和 `Sync`
+- 可以通过 `Arc` 在线程间共享
+- 并发操作（多个写入者或读取者）是线程安全的
+- 适用于单线程和多线程场景
+
 ## 重要说明
 
-1. **容量向上取整：** 请求的容量会向上取整到下一个 2 的幂次
-2. **仅限 SPSC：** 不适用于 MPSC、SPMC 或 MPMC 场景
-3. **自动清理：** `Consumer` 被 drop 时，缓冲区中的所有剩余元素都会自动 drop
-4. **非阻塞：** `push` 和 `pop` 永不阻塞；缓冲区满/空时返回错误
+### 两个模块的共同特性
+
+- **容量取整** - 所有容量都会自动向上取整到最接近的 2 的幂次以实现高效的掩码操作
+- **元素生命周期** - 元素在弹出或缓冲区清理时会被正确地 drop
+- **内存布局** - 内部使用 `MaybeUninit<T>` 以安全地处理未初始化的内存
+- **2的幂次优化** - 使用按位与运算代替除法实现快速取模操作
+
+### SPSC 模块特性
+
+- **线程安全** - 专为跨线程的单生产者单消费者场景设计
+- **自动清理** - `Consumer` 在被 drop 时自动清理剩余元素
+- **缓存索引** - Producer 和 Consumer 缓存读写索引以提升性能
+- **无覆盖** - 满时总是拒绝写入；返回 `PushError::Full`
+
+### Generic 模块特性
+
+- **灵活的并发** - 可以通过 `Arc` 在线程间共享，或用于单线程场景
+- **可配置覆盖** - 编译期 `OVERWRITE` 标志控制满时的行为：
+  - `true`：自动覆盖最旧的数据（循环缓冲区语义）
+  - `false`：拒绝新写入并返回错误
+- **手动清理** - 不会在 drop 时自动清理。需要时请显式调用 `clear()`
+- **零成本抽象** - 覆盖行为在编译期选择，无运行时开销
 
 ## 性能基准
 
