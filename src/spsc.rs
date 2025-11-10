@@ -598,142 +598,140 @@ impl<T, const N: usize> Drop for Consumer<T, N> {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_basic_push_pop() {
         let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(4).unwrap());
-        
+
         assert!(producer.push(1).is_ok());
         assert!(producer.push(2).is_ok());
         assert!(producer.push(3).is_ok());
-        
+
         assert_eq!(consumer.pop().unwrap(), 1);
         assert_eq!(consumer.pop().unwrap(), 2);
         assert_eq!(consumer.pop().unwrap(), 3);
         assert!(consumer.pop().is_err());
     }
-    
+
     #[test]
     fn test_capacity_rounding() {
         let (_, consumer) = new::<i32, 32>(NonZero::new(5).unwrap());
         // 5 should round up to 8 (next power of 2)
         assert_eq!(consumer.buffer().capacity(), 8);
-        
+
         let (_, consumer) = new::<i32, 64>(NonZero::new(32).unwrap());
         assert_eq!(consumer.buffer().capacity(), 32);
-        
+
         let (_, consumer) = new::<i32, 128>(NonZero::new(33).unwrap());
         // 33 should round up to 64
         assert_eq!(consumer.buffer().capacity(), 64);
     }
-    
+
     #[test]
     fn test_buffer_full() {
         let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(4).unwrap());
         // Actual capacity is 4, but we can only store 3 items (one slot reserved)
-        
+
         assert!(producer.push(1).is_ok());
         assert!(producer.push(2).is_ok());
         assert!(producer.push(3).is_ok());
         assert!(producer.push(4).is_ok());
-        
+
         // Buffer should be full now
         assert!(matches!(producer.push(5), Err(PushError::Full(5))));
-        
+
         // Pop one item to make space
         assert_eq!(consumer.pop().unwrap(), 1);
-        
+
         // Now we should be able to push again
         assert!(producer.push(5).is_ok());
     }
-    
+
     #[test]
     fn test_buffer_empty() {
         let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(4).unwrap());
-        
+
         assert!(consumer.pop().is_err());
         assert!(consumer.is_empty());
-        
+
         producer.push(42).unwrap();
         assert!(!consumer.is_empty());
-        
+
         consumer.pop().unwrap();
         assert!(consumer.is_empty());
     }
-    
+
     #[test]
     fn test_slots() {
         let (mut producer, consumer) = new::<i32, 32>(NonZero::new(8).unwrap());
-        
+
         assert_eq!(consumer.slots(), 0);
-        
+
         producer.push(1).unwrap();
         producer.push(2).unwrap();
         producer.push(3).unwrap();
-        
+
         assert_eq!(consumer.slots(), 3);
     }
-    
+
     #[test]
     fn test_wrap_around() {
         let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(4).unwrap());
-        
+
         // Fill and empty the buffer multiple times to test wrap-around
         for round in 0..10 {
             for i in 0..4 {
                 producer.push(round * 10 + i).unwrap();
             }
-            
+
             for i in 0..4 {
                 assert_eq!(consumer.pop().unwrap(), round * 10 + i);
             }
         }
     }
-    
+
     #[test]
     fn test_drop_cleanup() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
-        
+
         #[derive(Debug)]
         struct DropCounter {
             counter: Arc<AtomicUsize>,
         }
-        
+
         impl Drop for DropCounter {
             fn drop(&mut self) {
                 self.counter.fetch_add(1, Ordering::SeqCst);
             }
         }
-        
+
         let counter = Arc::new(AtomicUsize::new(0));
-        
+
         {
             let (mut producer, consumer) = new::<DropCounter, 32>(NonZero::new(8).unwrap());
-            
+
             for _ in 0..5 {
                 producer.push(DropCounter { counter: counter.clone() }).unwrap();
             }
-            
+
             // Drop consumer, which should drop all remaining items
             drop(consumer);
         }
-        
+
         // All 5 items should have been dropped
         assert_eq!(counter.load(Ordering::SeqCst), 5);
     }
-    
+
     #[test]
     fn test_concurrent_access() {
         use std::thread;
-        
+
         let (mut producer, mut consumer) = new::<u64, 128>(NonZero::new(128).unwrap());
-        
+
         let producer_handle = thread::spawn(move || {
             for i in 0..1000 {
                 loop {
@@ -744,7 +742,7 @@ mod tests {
                 }
             }
         });
-        
+
         let consumer_handle = thread::spawn(move || {
             let mut received = Vec::new();
             for _ in 0..1000 {
@@ -760,65 +758,65 @@ mod tests {
             }
             received
         });
-        
+
         producer_handle.join().unwrap();
         let received = consumer_handle.join().unwrap();
-        
+
         // Verify all numbers were received in order
         assert_eq!(received.len(), 1000);
         for (i, &val) in received.iter().enumerate() {
             assert_eq!(val, i as u64);
         }
     }
-    
+
     #[test]
     fn test_small_capacity_stack_allocation() {
         // Test that small capacities (≤32) use stack allocation
         // This test mainly ensures the code compiles and works with FixedVec
         let (mut producer, mut consumer) = new::<u8, 32>(NonZero::new(16).unwrap());
-        
+
         for i in 0..10 {
             producer.push(i).unwrap();
         }
-        
+
         for i in 0..10 {
             assert_eq!(consumer.pop().unwrap(), i);
         }
     }
-    
+
     #[test]
     fn test_large_capacity_heap_allocation() {
         // Test that large capacities (>32) work correctly with heap allocation
         let (mut producer, mut consumer) = new::<u8, 32>(NonZero::new(64).unwrap());
-        
+
         for i in 0..50 {
             producer.push(i).unwrap();
         }
-        
+
         for i in 0..50 {
             assert_eq!(consumer.pop().unwrap(), i);
         }
     }
-    
+
     // ==================== 边界条件测试 / Boundary Condition Tests ====================
-    
+
     #[test]
     fn test_capacity_one() {
         // Test minimum capacity
         // 测试最小容量
         let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(1).unwrap());
-        
+
         // After rounding, capacity should be 1 (2^0)
         // 向上取整后，容量应为 1 (2^0)
         assert_eq!(consumer.buffer().capacity(), 1);
-        
+
         assert!(producer.push(42).is_ok());
         assert!(matches!(producer.push(99), Err(PushError::Full(99))));
-        
+
         assert_eq!(consumer.pop().unwrap(), 42);
         assert!(consumer.pop().is_err());
     }
-    
+
     #[test]
     fn test_power_of_two_capacities() {
         // Test various power-of-2 capacities
@@ -829,7 +827,7 @@ mod tests {
             assert_eq!(consumer.buffer().capacity(), capacity);
         }
     }
-    
+
     #[test]
     fn test_non_power_of_two_rounding() {
         // Test that non-power-of-2 capacities are rounded up correctly
@@ -846,20 +844,20 @@ mod tests {
             (100, 128),
             (1000, 1024),
         ];
-        
+
         for (input, expected) in test_cases {
             let (_, consumer) = new::<u8, 128>(NonZero::new(input).unwrap());
             assert_eq!(consumer.buffer().capacity(), expected,
-                "Capacity {} should round up to {}", input, expected);
+                       "Capacity {} should round up to {}", input, expected);
         }
     }
-    
+
     #[test]
     fn test_single_element_operations() {
         // Test push and pop with single element repeatedly
         // 测试单个元素的重复推送和弹出
         let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(4).unwrap());
-        
+
         for i in 0..100 {
             producer.push(i).unwrap();
             assert_eq!(consumer.slots(), 1);
@@ -868,13 +866,13 @@ mod tests {
             assert!(consumer.is_empty());
         }
     }
-    
+
     #[test]
     fn test_alternating_push_pop() {
         // Test alternating push and pop operations
         // 测试交替推送和弹出操作
         let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(8).unwrap());
-        
+
         for i in 0..50 {
             producer.push(i * 2).unwrap();
             producer.push(i * 2 + 1).unwrap();
@@ -882,13 +880,13 @@ mod tests {
             assert_eq!(consumer.pop().unwrap(), i * 2 + 1);
         }
     }
-    
+
     #[test]
     fn test_index_wrapping() {
         // Test that indices wrap correctly after overflow
         // 测试索引在溢出后正确环绕
         let (mut producer, mut consumer) = new::<usize, 32>(NonZero::new(4).unwrap());
-        
+
         // Fill and empty many times to cause index wrapping
         // 多次填充和清空以导致索引环绕
         for iteration in 0..1000 {
@@ -900,77 +898,77 @@ mod tests {
             }
         }
     }
-    
+
     // ==================== 不同 N 值测试 / Different N Value Tests ====================
-    
+
     #[test]
     fn test_various_stack_thresholds() {
         // Test with N = 16
         let (mut p1, mut c1) = new::<u32, 16>(NonZero::new(8).unwrap());
         p1.push(1).unwrap();
         assert_eq!(c1.pop().unwrap(), 1);
-        
+
         // Test with N = 64
         let (mut p2, mut c2) = new::<u32, 64>(NonZero::new(32).unwrap());
         p2.push(2).unwrap();
         assert_eq!(c2.pop().unwrap(), 2);
-        
+
         // Test with N = 128
         let (mut p3, mut c3) = new::<u32, 128>(NonZero::new(64).unwrap());
         p3.push(3).unwrap();
         assert_eq!(c3.pop().unwrap(), 3);
-        
+
         // Test with N = 256
         let (mut p4, mut c4) = new::<u32, 256>(NonZero::new(128).unwrap());
         p4.push(4).unwrap();
         assert_eq!(c4.pop().unwrap(), 4);
     }
-    
+
     #[test]
     fn test_small_n_with_large_capacity() {
         // Test N=8 with capacity > N (should use heap)
         // 测试 N=8 但容量 > N（应使用堆）
         let (mut producer, mut consumer) = new::<u64, 8>(NonZero::new(32).unwrap());
-        
+
         for i in 0..20 {
             producer.push(i).unwrap();
         }
-        
+
         for i in 0..20 {
             assert_eq!(consumer.pop().unwrap(), i);
         }
     }
-    
+
     #[test]
     fn test_large_n_with_small_capacity() {
         // Test N=256 with capacity < N (should use stack)
         // 测试 N=256 但容量 < N（应使用栈）
         let (mut producer, mut consumer) = new::<u64, 256>(NonZero::new(16).unwrap());
-        
+
         for i in 0..10 {
             producer.push(i).unwrap();
         }
-        
+
         for i in 0..10 {
             assert_eq!(consumer.pop().unwrap(), i);
         }
     }
-    
+
     // ==================== 类型测试 / Type Tests ====================
-    
+
     #[test]
     fn test_zero_sized_types() {
         // Test with zero-sized type
         // 测试零大小类型
         let (mut producer, mut consumer) = new::<(), 32>(NonZero::new(4).unwrap());
-        
+
         producer.push(()).unwrap();
         producer.push(()).unwrap();
-        
+
         assert_eq!(consumer.pop().unwrap(), ());
         assert_eq!(consumer.pop().unwrap(), ());
     }
-    
+
     #[test]
     fn test_large_types() {
         // Test with large struct
@@ -979,63 +977,63 @@ mod tests {
         struct LargeStruct {
             data: [u64; 32],
         }
-        
+
         let (mut producer, mut consumer) = new::<LargeStruct, 32>(NonZero::new(4).unwrap());
-        
+
         let item1 = LargeStruct { data: [1; 32] };
         let item2 = LargeStruct { data: [2; 32] };
-        
+
         producer.push(item1.clone()).unwrap();
         producer.push(item2.clone()).unwrap();
-        
+
         assert_eq!(consumer.pop().unwrap(), item1);
         assert_eq!(consumer.pop().unwrap(), item2);
     }
-    
+
     #[test]
     fn test_string_type() {
         // Test with String (heap-allocated type)
         // 测试 String（堆分配类型）
         let (mut producer, mut consumer) = new::<String, 32>(NonZero::new(8).unwrap());
-        
+
         let messages = vec!["Hello", "World", "Rust", "Ring", "Buffer"];
-        
+
         for msg in &messages {
             producer.push(msg.to_string()).unwrap();
         }
-        
+
         for msg in &messages {
             assert_eq!(consumer.pop().unwrap(), msg.to_string());
         }
     }
-    
+
     #[test]
     fn test_option_type() {
         // Test with Option<T>
         // 测试 Option<T>
         let (mut producer, mut consumer) = new::<Option<i32>, 32>(NonZero::new(4).unwrap());
-        
+
         producer.push(Some(42)).unwrap();
         producer.push(None).unwrap();
         producer.push(Some(100)).unwrap();
-        
+
         assert_eq!(consumer.pop().unwrap(), Some(42));
         assert_eq!(consumer.pop().unwrap(), None);
         assert_eq!(consumer.pop().unwrap(), Some(100));
     }
-    
+
     // ==================== 并发测试 / Concurrency Tests ====================
-    
+
     #[test]
     fn test_concurrent_small_buffer() {
         // Test concurrent access with small buffer (high contention)
         // 测试小缓冲区的并发访问（高竞争）
         use std::thread;
-        
+
         let (mut producer, mut consumer) = new::<u32, 32>(NonZero::new(4).unwrap());
-        
+
         let count = 100;
-        
+
         let producer_handle = thread::spawn(move || {
             for i in 0..count {
                 loop {
@@ -1046,7 +1044,7 @@ mod tests {
                 }
             }
         });
-        
+
         let consumer_handle = thread::spawn(move || {
             let mut sum = 0;
             for _ in 0..count {
@@ -1062,24 +1060,24 @@ mod tests {
             }
             sum
         });
-        
+
         producer_handle.join().unwrap();
         let sum = consumer_handle.join().unwrap();
-        
+
         // Sum of 0..100 = 100*99/2 = 4950
         assert_eq!(sum, (count * (count - 1)) / 2);
     }
-    
+
     #[test]
     fn test_concurrent_large_buffer() {
         // Test concurrent access with large buffer (low contention)
         // 测试大缓冲区的并发访问（低竞争）
         use std::thread;
-        
+
         let (mut producer, mut consumer) = new::<u64, 512>(NonZero::new(512).unwrap());
-        
+
         let count = 10000;
-        
+
         let producer_handle = thread::spawn(move || {
             for i in 0..count {
                 loop {
@@ -1090,7 +1088,7 @@ mod tests {
                 }
             }
         });
-        
+
         let consumer_handle = thread::spawn(move || {
             let mut received = 0;
             for _ in 0..count {
@@ -1106,22 +1104,22 @@ mod tests {
             }
             received
         });
-        
+
         producer_handle.join().unwrap();
         let received = consumer_handle.join().unwrap();
-        
+
         assert_eq!(received, count);
     }
-    
+
     #[test]
     fn test_concurrent_with_different_speeds() {
         // Test when producer and consumer have different speeds
         // 测试生产者和消费者速度不同的情况
         use std::thread;
         use std::time::Duration;
-        
+
         let (mut producer, mut consumer) = new::<u32, 64>(NonZero::new(32).unwrap());
-        
+
         let producer_handle = thread::spawn(move || {
             for i in 0..50 {
                 loop {
@@ -1137,7 +1135,7 @@ mod tests {
                 }
             }
         });
-        
+
         let consumer_handle = thread::spawn(move || {
             let mut received = Vec::new();
             for _ in 0..50 {
@@ -1153,27 +1151,27 @@ mod tests {
             }
             received
         });
-        
+
         producer_handle.join().unwrap();
         let received = consumer_handle.join().unwrap();
-        
+
         assert_eq!(received.len(), 50);
         for (i, &val) in received.iter().enumerate() {
             assert_eq!(val, i as u32);
         }
     }
-    
+
     // ==================== 错误处理测试 / Error Handling Tests ====================
-    
+
     #[test]
     fn test_push_error_value_returned() {
         // Test that PushError returns the value
         // 测试 PushError 返回值
         let (mut producer, _consumer) = new::<String, 32>(NonZero::new(2).unwrap());
-        
+
         producer.push("first".to_string()).unwrap();
         producer.push("second".to_string()).unwrap();
-        
+
         let value = "third".to_string();
         match producer.push(value.clone()) {
             Err(PushError::Full(returned_value)) => {
@@ -1182,69 +1180,69 @@ mod tests {
             Ok(_) => panic!("Expected PushError::Full"),
         }
     }
-    
+
     #[test]
     fn test_pop_error() {
         // Test PopError::Empty
         // 测试 PopError::Empty
         let (_producer, mut consumer) = new::<i32, 32>(NonZero::new(4).unwrap());
-        
+
         match consumer.pop() {
             Err(PopError::Empty) => {} // Expected
             Ok(_) => panic!("Expected PopError::Empty"),
         }
     }
-    
+
     // ==================== Consumer 方法测试 / Consumer Method Tests ====================
-    
+
     #[test]
     fn test_is_empty_after_operations() {
         // Test is_empty() with various operations
         // 测试各种操作后的 is_empty()
         let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(4).unwrap());
-        
+
         assert!(consumer.is_empty());
-        
+
         producer.push(1).unwrap();
         assert!(!consumer.is_empty());
-        
+
         producer.push(2).unwrap();
         assert!(!consumer.is_empty());
-        
+
         consumer.pop().unwrap();
         assert!(!consumer.is_empty());
-        
+
         consumer.pop().unwrap();
         assert!(consumer.is_empty());
     }
-    
+
     #[test]
     fn test_slots_accuracy() {
         // Test that slots() returns accurate count
         // 测试 slots() 返回准确计数
         let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(16).unwrap());
-        
+
         assert_eq!(consumer.slots(), 0);
-        
+
         for i in 1..=10 {
             producer.push(i).unwrap();
             assert_eq!(consumer.slots(), i as usize);
         }
-        
+
         for i in (0..10).rev() {
             consumer.pop().unwrap();
             assert_eq!(consumer.slots(), i);
         }
-        
+
         assert_eq!(consumer.slots(), 0);
     }
-    
+
     #[test]
     fn test_slots_with_wrap_around() {
         // Test slots() after indices wrap around
         // 测试索引环绕后的 slots()
         let (mut producer, mut consumer) = new::<u32, 32>(NonZero::new(4).unwrap());
-        
+
         // Cause many wrap-arounds
         // 导致多次环绕
         for _ in 0..100 {
@@ -1252,108 +1250,108 @@ mod tests {
                 producer.push(i).unwrap();
             }
             assert_eq!(consumer.slots(), 3);
-            
+
             for _ in 0..3 {
                 consumer.pop().unwrap();
             }
             assert_eq!(consumer.slots(), 0);
         }
     }
-    
+
     // ==================== Drop 和内存测试 / Drop and Memory Tests ====================
-    
+
     #[test]
     fn test_partial_drop_cleanup() {
         // Test that consumer drops only remaining items
         // 测试消费者仅 drop 剩余项
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
-        
+
         #[derive(Debug)]
         struct DropCounter {
             counter: Arc<AtomicUsize>,
         }
-        
+
         impl Drop for DropCounter {
             fn drop(&mut self) {
                 self.counter.fetch_add(1, Ordering::SeqCst);
             }
         }
-        
+
         let counter = Arc::new(AtomicUsize::new(0));
-        
+
         {
             let (mut producer, mut consumer) = new::<DropCounter, 32>(NonZero::new(16).unwrap());
-            
+
             // Push 10 items (capacity is 16, so no overflow)
             for _ in 0..10 {
                 producer.push(DropCounter { counter: counter.clone() }).unwrap();
             }
-            
+
             // Pop 6 items (they should be dropped)
             for _ in 0..6 {
                 consumer.pop().unwrap();
             }
-            
+
             // At this point, 6 items have been dropped
             assert_eq!(counter.load(Ordering::SeqCst), 6);
-            
+
             // Drop consumer, which should drop remaining 4 items
             drop(consumer);
         }
-        
+
         // All 10 items should have been dropped
         assert_eq!(counter.load(Ordering::SeqCst), 10);
     }
-    
+
     #[test]
     fn test_empty_buffer_drop() {
         // Test dropping empty buffer
         // 测试 drop 空缓冲区
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
-        
+
         #[derive(Debug)]
         struct DropCounter {
             counter: Arc<AtomicUsize>,
         }
-        
+
         impl Drop for DropCounter {
             fn drop(&mut self) {
                 self.counter.fetch_add(1, Ordering::SeqCst);
             }
         }
-        
+
         let counter = Arc::new(AtomicUsize::new(0));
-        
+
         {
             let (mut producer, mut consumer) = new::<DropCounter, 32>(NonZero::new(8).unwrap());
-            
+
             producer.push(DropCounter { counter: counter.clone() }).unwrap();
             consumer.pop().unwrap();
-            
+
             // Buffer is now empty
             assert!(consumer.is_empty());
-            
+
             // Drop should not drop anything
             drop(consumer);
         }
-        
+
         // Only 1 item should have been dropped (the one we popped)
         assert_eq!(counter.load(Ordering::SeqCst), 1);
     }
-    
+
     // ==================== 压力测试 / Stress Tests ====================
-    
+
     #[test]
     fn test_high_throughput() {
         // Stress test with high throughput
         // 高吞吐量压力测试
         use std::thread;
-        
+
         let (mut producer, mut consumer) = new::<u64, 256>(NonZero::new(256).unwrap());
         let count = 100000;
-        
+
         let producer_handle = thread::spawn(move || {
             for i in 0..count {
                 loop {
@@ -1364,7 +1362,7 @@ mod tests {
                 }
             }
         });
-        
+
         let consumer_handle = thread::spawn(move || {
             let mut last = None;
             for _ in 0..count {
@@ -1383,175 +1381,175 @@ mod tests {
             }
             last
         });
-        
+
         producer_handle.join().unwrap();
         let last = consumer_handle.join().unwrap();
-        
+
         assert_eq!(last, Some(count - 1));
     }
-    
+
     // ==================== 新增 API 测试 / New API Tests ====================
-    
+
     #[test]
     fn test_producer_capacity_queries() {
         // Test Producer capacity query methods
         // 测试 Producer 容量查询方法
         let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(8).unwrap());
-        
+
         assert_eq!(producer.capacity(), 8);
         assert_eq!(producer.len(), 0);
         assert_eq!(producer.slots(), 0);
         assert_eq!(producer.free_slots(), 8);
         assert!(!producer.is_full());
-        
+
         producer.push(1).unwrap();
         producer.push(2).unwrap();
         producer.push(3).unwrap();
-        
+
         assert_eq!(producer.len(), 3);
         assert_eq!(producer.slots(), 3);
         assert_eq!(producer.free_slots(), 5);
         assert!(!producer.is_full());
-        
+
         // Fill the buffer
         producer.push(4).unwrap();
         producer.push(5).unwrap();
         producer.push(6).unwrap();
         producer.push(7).unwrap();
         producer.push(8).unwrap();
-        
+
         assert_eq!(producer.len(), 8);
         assert_eq!(producer.slots(), 8);
         assert_eq!(producer.free_slots(), 0);
         assert!(producer.is_full());
-        
+
         // Pop one and check again
         consumer.pop().unwrap();
-        
+
         assert_eq!(producer.len(), 7);
         assert_eq!(producer.free_slots(), 1);
         assert!(!producer.is_full());
     }
-    
+
     #[test]
     fn test_consumer_len_and_capacity() {
         // Test Consumer len() and capacity() methods
         // 测试 Consumer 的 len() 和 capacity() 方法
         let (mut producer, consumer) = new::<i32, 32>(NonZero::new(16).unwrap());
-        
+
         assert_eq!(consumer.len(), 0);
         assert_eq!(consumer.capacity(), 16);
-        
+
         for i in 0..10 {
             producer.push(i).unwrap();
         }
-        
+
         assert_eq!(consumer.len(), 10);
         assert_eq!(consumer.capacity(), 16);
     }
-    
+
     #[test]
     fn test_peek() {
         // Test peek operation
         // 测试 peek 操作
         let (mut producer, consumer) = new::<i32, 32>(NonZero::new(8).unwrap());
-        
+
         // Peek empty buffer
         assert!(consumer.peek().is_none());
-        
+
         producer.push(42).unwrap();
         producer.push(100).unwrap();
         producer.push(200).unwrap();
-        
+
         // Peek should return first element without removing it
         assert_eq!(consumer.peek(), Some(&42));
         assert_eq!(consumer.peek(), Some(&42)); // Peek again, should be same
         assert_eq!(consumer.len(), 3); // Length unchanged
     }
-    
+
     #[test]
     fn test_peek_after_pop() {
         // Test peek after pop operations
         // 测试 pop 后的 peek 操作
         let (mut producer, mut consumer) = new::<String, 32>(NonZero::new(8).unwrap());
-        
+
         producer.push("first".to_string()).unwrap();
         producer.push("second".to_string()).unwrap();
         producer.push("third".to_string()).unwrap();
-        
+
         assert_eq!(consumer.peek(), Some(&"first".to_string()));
         consumer.pop().unwrap();
-        
+
         assert_eq!(consumer.peek(), Some(&"second".to_string()));
         consumer.pop().unwrap();
-        
+
         assert_eq!(consumer.peek(), Some(&"third".to_string()));
         consumer.pop().unwrap();
-        
+
         assert!(consumer.peek().is_none());
     }
-    
+
     #[test]
     fn test_push_slice_basic() {
         // Test basic push_slice operation
         // 测试基本的 push_slice 操作
         let (mut producer, mut consumer) = new::<u32, 32>(NonZero::new(16).unwrap());
-        
+
         let data = [1, 2, 3, 4, 5];
         let pushed = producer.push_slice(&data);
-        
+
         assert_eq!(pushed, 5);
         assert_eq!(consumer.len(), 5);
-        
+
         for i in 0..5 {
             assert_eq!(consumer.pop().unwrap(), data[i]);
         }
     }
-    
+
     #[test]
     fn test_push_slice_partial() {
         // Test push_slice when buffer is partially full
         // 测试缓冲区部分满时的 push_slice
         let (mut producer, mut consumer) = new::<u32, 32>(NonZero::new(8).unwrap());
-        
+
         // Fill with 5 elements, leaving room for 3
         let initial = [1, 2, 3, 4, 5];
         producer.push_slice(&initial);
-        
+
         // Try to push 10 more, should only push 3
         let more = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         let pushed = producer.push_slice(&more);
-        
+
         assert_eq!(pushed, 3);
         assert_eq!(consumer.len(), 8);
         assert!(producer.is_full());
-        
+
         // Verify values
         for i in 1..=8 {
             assert_eq!(consumer.pop().unwrap(), i);
         }
     }
-    
+
     #[test]
     fn test_push_slice_wrap_around() {
         // Test push_slice with wrap-around
         // 测试 push_slice 的环绕情况
         let (mut producer, mut consumer) = new::<u32, 32>(NonZero::new(8).unwrap());
-        
+
         // Fill buffer
         producer.push_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
-        
+
         // Pop some elements
         for _ in 0..5 {
             consumer.pop().unwrap();
         }
-        
+
         // Push more elements (will cause wrap-around)
         let data = [10, 11, 12, 13, 14];
         let pushed = producer.push_slice(&data);
-        
+
         assert_eq!(pushed, 5);
-        
+
         // Verify all values
         assert_eq!(consumer.pop().unwrap(), 6);
         assert_eq!(consumer.pop().unwrap(), 7);
@@ -1562,250 +1560,249 @@ mod tests {
         assert_eq!(consumer.pop().unwrap(), 13);
         assert_eq!(consumer.pop().unwrap(), 14);
     }
-    
+
     #[test]
     fn test_push_slice_empty() {
         // Test push_slice with empty slice
         // 测试空切片的 push_slice
         let (mut producer, _consumer) = new::<u32, 32>(NonZero::new(8).unwrap());
-        
+
         let pushed = producer.push_slice(&[]);
         assert_eq!(pushed, 0);
     }
-    
+
     #[test]
     fn test_pop_slice_basic() {
         // Test basic pop_slice operation
         // 测试基本的 pop_slice 操作
         let (mut producer, mut consumer) = new::<u32, 32>(NonZero::new(16).unwrap());
-        
+
         // Push some data
         for i in 0..10 {
             producer.push(i).unwrap();
         }
-        
+
         let mut dest = [0u32; 5];
         let popped = consumer.pop_slice(&mut dest);
-        
+
         assert_eq!(popped, 5);
         assert_eq!(dest, [0, 1, 2, 3, 4]);
         assert_eq!(consumer.len(), 5);
     }
-    
+
     #[test]
     fn test_pop_slice_partial() {
         // Test pop_slice when buffer has fewer elements than dest
         // 测试当缓冲区元素少于目标切片时的 pop_slice
         let (mut producer, mut consumer) = new::<u32, 32>(NonZero::new(16).unwrap());
-        
+
         producer.push(1).unwrap();
         producer.push(2).unwrap();
         producer.push(3).unwrap();
-        
+
         let mut dest = [0u32; 10];
         let popped = consumer.pop_slice(&mut dest);
-        
+
         assert_eq!(popped, 3);
         assert_eq!(&dest[0..3], &[1, 2, 3]);
         assert!(consumer.is_empty());
     }
-    
+
     #[test]
     fn test_pop_slice_wrap_around() {
         // Test pop_slice with wrap-around
         // 测试 pop_slice 的环绕情况
         let (mut producer, mut consumer) = new::<u32, 32>(NonZero::new(8).unwrap());
-        
+
         // Fill buffer
         producer.push_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
-        
+
         // Pop 5 elements
         let mut temp = [0u32; 5];
         let popped = consumer.pop_slice(&mut temp);
         assert_eq!(popped, 5);
         assert_eq!(temp, [1, 2, 3, 4, 5]);
-        
+
         // Push 5 more elements (will cause wrap-around in the ring buffer)
         let pushed = producer.push_slice(&[9, 10, 11, 12, 13]);
         assert_eq!(pushed, 5);
-        
+
         // Pop remaining 3 elements from first batch
         let mut dest1 = [0u32; 3];
         let popped1 = consumer.pop_slice(&mut dest1);
         assert_eq!(popped1, 3);
         assert_eq!(dest1, [6, 7, 8]);
-        
+
         // Pop 5 elements from second batch
         let mut dest2 = [0u32; 5];
         let popped2 = consumer.pop_slice(&mut dest2);
         assert_eq!(popped2, 5);
         assert_eq!(dest2, [9, 10, 11, 12, 13]);
     }
-    
+
     #[test]
     fn test_pop_slice_empty() {
         // Test pop_slice on empty buffer
         // 测试空缓冲区的 pop_slice
         let (_producer, mut consumer) = new::<u32, 32>(NonZero::new(8).unwrap());
-        
+
         let mut dest = [0u32; 5];
         let popped = consumer.pop_slice(&mut dest);
-        
+
         assert_eq!(popped, 0);
     }
-    
+
     #[test]
     fn test_clear() {
         // Test clear operation
         // 测试 clear 操作
         let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(16).unwrap());
-        
+
         for i in 0..10 {
             producer.push(i).unwrap();
         }
-        
+
         assert_eq!(consumer.len(), 10);
-        
+
         consumer.clear();
-        
+
         assert_eq!(consumer.len(), 0);
         assert!(consumer.is_empty());
     }
-    
+
     #[test]
     fn test_clear_with_drop() {
         // Test that clear properly drops all elements
         // 测试 clear 正确 drop 所有元素
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
-        
+
         #[derive(Debug)]
         struct DropCounter {
             counter: Arc<AtomicUsize>,
         }
-        
+
         impl Drop for DropCounter {
             fn drop(&mut self) {
                 self.counter.fetch_add(1, Ordering::SeqCst);
             }
         }
-        
+
         let counter = Arc::new(AtomicUsize::new(0));
-        
+
         {
             let (mut producer, mut consumer) = new::<DropCounter, 32>(NonZero::new(16).unwrap());
-            
+
             for _ in 0..8 {
                 producer.push(DropCounter { counter: counter.clone() }).unwrap();
             }
-            
+
             assert_eq!(counter.load(Ordering::SeqCst), 0);
-            
+
             consumer.clear();
-            
+
             assert_eq!(counter.load(Ordering::SeqCst), 8);
         }
     }
-    
+
     #[test]
     fn test_drain_iterator() {
         // Test drain iterator
         // 测试 drain 迭代器
         let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(16).unwrap());
-        
+
         for i in 0..10 {
             producer.push(i).unwrap();
         }
-        
+
         let collected: Vec<i32> = consumer.drain().collect();
-        
+
         assert_eq!(collected, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
         assert!(consumer.is_empty());
     }
-    
+
     #[test]
     fn test_drain_empty() {
         // Test drain on empty buffer
         // 测试空缓冲区的 drain
         let (_producer, mut consumer) = new::<i32, 32>(NonZero::new(8).unwrap());
-        
+
         let collected: Vec<i32> = consumer.drain().collect();
-        
+
         assert!(collected.is_empty());
     }
-    
+
     #[test]
     fn test_drain_size_hint() {
         // Test drain iterator size_hint
         // 测试 drain 迭代器的 size_hint
         let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(16).unwrap());
-        
+
         for i in 0..5 {
             producer.push(i).unwrap();
         }
-        
+
         let mut drain = consumer.drain();
-        
+
         assert_eq!(drain.size_hint(), (5, Some(5)));
-        
+
         drain.next();
         assert_eq!(drain.size_hint(), (4, Some(4)));
-        
+
         drain.next();
         assert_eq!(drain.size_hint(), (3, Some(3)));
     }
-    
+
     #[test]
     fn test_drain_partial() {
         // Test partially consuming drain iterator
         // 测试部分消费 drain 迭代器
         let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(16).unwrap());
-        
+
         for i in 0..10 {
             producer.push(i).unwrap();
         }
-        
+
         let mut drain = consumer.drain();
-        
+
         assert_eq!(drain.next(), Some(0));
         assert_eq!(drain.next(), Some(1));
         assert_eq!(drain.next(), Some(2));
-        
+
         drop(drain); // Drop the iterator
-        
+
         // Buffer should have 7 elements left
         assert_eq!(consumer.len(), 7);
     }
-    
+
     #[test]
     fn test_combined_operations() {
         // Test combining various new APIs
         // 测试组合使用各种新 API
         let (mut producer, mut consumer) = new::<u32, 32>(NonZero::new(16).unwrap());
-        
+
         // Batch push
         let data = [1, 2, 3, 4, 5];
         producer.push_slice(&data);
-        
+
         assert_eq!(producer.len(), 5);
         assert_eq!(consumer.len(), 5);
         assert_eq!(consumer.capacity(), 16);
-        
+
         // Peek
         assert_eq!(consumer.peek(), Some(&1));
-        
+
         // Batch pop
         let mut dest = [0u32; 3];
         consumer.pop_slice(&mut dest);
         assert_eq!(dest, [1, 2, 3]);
-        
+
         assert_eq!(consumer.len(), 2);
         assert_eq!(producer.free_slots(), 14);
-        
+
         // Clear remaining
         consumer.clear();
         assert!(consumer.is_empty());
         assert!(!producer.is_full());
     }
 }
-
