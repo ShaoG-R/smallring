@@ -243,6 +243,49 @@ impl<T, const N: usize> RingBufCore<T, N> {
             &*ptr
         }
     }
+    
+    /// Get a pointer to the buffer for direct access
+    /// 
+    /// 获取缓冲区指针以供直接访问
+    /// 
+    /// # Safety
+    /// 
+    /// Caller must ensure:
+    /// - Proper bounds checking when accessing elements
+    /// - No data races with concurrent access
+    /// - Elements are initialized before reading
+    /// 
+    /// # 安全性
+    /// 
+    /// 调用者必须确保：
+    /// - 访问元素时进行适当的边界检查
+    /// - 与并发访问无数据竞争
+    /// - 在读取前元素已初始化
+    #[inline]
+    pub unsafe fn buffer_ptr(&self) -> *const T {
+        self.buffer.as_ptr().cast::<T>()
+    }
+
+    /// Get a pointer to the element at the specified index
+    /// 
+    /// 获取指定索引处的元素指针
+    /// 
+    /// # Safety
+    /// 
+    /// Caller must ensure:
+    /// - The index is within bounds (use mask() to calculate)
+    /// 
+    /// # 安全性
+    /// 
+    /// 调用者必须确保：
+    /// - 索引在边界内（使用 mask() 计算）
+    /// - 该索引处的元素已初始化
+    #[inline]
+    pub unsafe fn buffer_ptr_at(&self, index: usize) -> *const T {
+        unsafe {
+            self.buffer.get_unchecked_ptr(index).cast()
+        }
+    }
 }
 
 /// Batch copy operations for Copy types

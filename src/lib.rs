@@ -73,7 +73,7 @@
 //! 
 //! // Overwrite mode: automatically overwrites oldest data when full
 //! // 覆盖模式：满时自动覆盖最旧的数据
-//! let buf_overwrite: RingBuf<i32, 32, true> = RingBuf::new(4);
+//! let mut buf_overwrite: RingBuf<i32, 32, true> = RingBuf::new(4);
 //! buf_overwrite.push(1); // Returns None
 //! buf_overwrite.push(2);
 //! buf_overwrite.push(3);
@@ -82,7 +82,7 @@
 //! 
 //! // Non-overwrite mode: rejects writes when full
 //! // 非覆盖模式：满时拒绝写入
-//! let buf_reject: RingBuf<i32, 32, false> = RingBuf::new(4);
+//! let mut buf_reject: RingBuf<i32, 32, false> = RingBuf::new(4);
 //! buf_reject.push(1).unwrap(); // Returns Ok(())
 //! buf_reject.push(2).unwrap();
 //! buf_reject.push(3).unwrap();
@@ -181,12 +181,12 @@
 //! 
 //! ```rust
 //! use smallring::generic::RingBuf;
-//! use std::sync::Arc;
+//! use std::sync::{Arc, Mutex};
 //! use std::thread;
 //! 
-//! // Overwrite mode is thread-safe for concurrent writers
-//! // 覆盖模式对于并发写入者是线程安全的
-//! let buf = Arc::new(RingBuf::<u64, 128, true>::new(128));
+//! // Overwrite mode with Mutex for thread-safe concurrent writes
+//! // 使用 Mutex 的覆盖模式以实现线程安全的并发写入
+//! let buf = Arc::new(Mutex::new(RingBuf::<u64, 128, true>::new(128)));
 //! let mut handles = vec![];
 //! 
 //! // Multiple writer threads
@@ -196,7 +196,8 @@
 //!     let handle = thread::spawn(move || {
 //!         for i in 0..100 {
 //!             let value = (thread_id * 100 + i) as u64;
-//!             buf_clone.push(value); // Automatically overwrites old data
+//!             let mut buf = buf_clone.lock().unwrap();
+//!             buf.push(value); // Automatically overwrites old data
 //!         }
 //!     });
 //!     handles.push(handle);
@@ -357,7 +358,7 @@
 //! ```rust
 //! use smallring::generic::RingBuf;
 //! 
-//! let buf: RingBuf<u32, 64, true> = RingBuf::new(32);
+//! let mut buf: RingBuf<u32, 64, true> = RingBuf::new(32);
 //! 
 //! // Push multiple elements at once
 //! // 一次推送多个元素
@@ -415,7 +416,7 @@
 //! ```rust
 //! use smallring::generic::RingBuf;
 //! 
-//! let buf: RingBuf<i32, 32, false> = RingBuf::new(8);
+//! let mut buf: RingBuf<i32, 32, false> = RingBuf::new(8);
 //! 
 //! buf.push(42).unwrap();
 //! buf.push(100).unwrap();
@@ -536,6 +537,9 @@ pub mod generic;
 // 内部模块
 mod vec;
 mod core;
+
+#[cfg(test)]
+mod tests;
 
 // Re-exports for convenience
 // 便捷的重新导出

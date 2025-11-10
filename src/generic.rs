@@ -19,6 +19,78 @@
 use super::core::RingBufCore;
 use std::sync::atomic::Ordering;
 
+/// Iterator over ring buffer elements
+/// 
+/// 环形缓冲区元素的迭代器
+pub struct Iter<'a, T> {
+    first: std::slice::Iter<'a, T>,
+    second: std::slice::Iter<'a, T>,
+}
+
+impl<'a, T> Iterator for Iter<'a, T> {
+    type Item = &'a T;
+    
+    fn next(&mut self) -> Option<Self::Item> {
+        self.first.next().or_else(|| self.second.next())
+    }
+    
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let (first_low, first_high) = self.first.size_hint();
+        let (second_low, second_high) = self.second.size_hint();
+        let low = first_low + second_low;
+        let high = first_high.and_then(|fh| second_high.map(|sh| fh + sh));
+        (low, high)
+    }
+}
+
+impl<'a, T> ExactSizeIterator for Iter<'a, T> {
+    fn len(&self) -> usize {
+        self.first.len() + self.second.len()
+    }
+}
+
+impl<'a, T> DoubleEndedIterator for Iter<'a, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.second.next_back().or_else(|| self.first.next_back())
+    }
+}
+
+/// Mutable iterator over ring buffer elements
+/// 
+/// 环形缓冲区元素的可变迭代器
+pub struct IterMut<'a, T> {
+    first: std::slice::IterMut<'a, T>,
+    second: std::slice::IterMut<'a, T>,
+}
+
+impl<'a, T> Iterator for IterMut<'a, T> {
+    type Item = &'a mut T;
+    
+    fn next(&mut self) -> Option<Self::Item> {
+        self.first.next().or_else(|| self.second.next())
+    }
+    
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let (first_low, first_high) = self.first.size_hint();
+        let (second_low, second_high) = self.second.size_hint();
+        let low = first_low + second_low;
+        let high = first_high.and_then(|fh| second_high.map(|sh| fh + sh));
+        (low, high)
+    }
+}
+
+impl<'a, T> ExactSizeIterator for IterMut<'a, T> {
+    fn len(&self) -> usize {
+        self.first.len() + self.second.len()
+    }
+}
+
+impl<'a, T> DoubleEndedIterator for IterMut<'a, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.second.next_back().or_else(|| self.first.next_back())
+    }
+}
+
 /// Ring buffer operation error
 /// 
 /// 环形缓冲区操作错误
@@ -78,7 +150,7 @@ pub trait PushDispatch<T, const N: usize, const OVERWRITE: bool> {
     type PushOutput;
 
     /// The actual push implementation.
-    fn push_impl(ringbuf: &RingBuf<T, N, OVERWRITE>, value: T) -> Self::PushOutput;
+    fn push_impl(ringbuf: &mut RingBuf<T, N, OVERWRITE>, value: T) -> Self::PushOutput;
 }
 
 /// Marker struct for compile-time dispatch.
@@ -89,7 +161,7 @@ impl<T, const N: usize> PushDispatch<T, N, true> for PushMarker<true> {
     type PushOutput = Option<T>;
 
     #[inline]
-    fn push_impl(ringbuf: &RingBuf<T, N, true>, value: T) -> Self::PushOutput {
+    fn push_impl(ringbuf: &mut RingBuf<T, N, true>, value: T) -> Self::PushOutput {
         let write = ringbuf.core.write_idx().fetch_add(1, Ordering::Relaxed);
         let index = write & ringbuf.core.mask();
         
@@ -121,7 +193,7 @@ impl<T, const N: usize> PushDispatch<T, N, false> for PushMarker<false> {
     type PushOutput = Result<(), RingBufError<T>>;
 
     #[inline]
-    fn push_impl(ringbuf: &RingBuf<T, N, false>, value: T) -> Self::PushOutput {
+    fn push_impl(ringbuf: &mut RingBuf<T, N, false>, value: T) -> Self::PushOutput {
         let write = ringbuf.core.write_idx().fetch_add(1, Ordering::Relaxed);
         
         let read = ringbuf.core.read_idx().load(Ordering::Acquire);
@@ -235,19 +307,19 @@ impl<T, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
     /// use smallring::generic::{RingBuf, RingBufError};
     ///
     /// // Overwrite mode (OVERWRITE = true)
-    /// let buf_overwrite: RingBuf<i32, 32, true> = RingBuf::new(2);
+    /// let mut buf_overwrite: RingBuf<i32, 32, true> = RingBuf::new(2);
     /// assert_eq!(buf_overwrite.push(1), None);
     /// assert_eq!(buf_overwrite.push(2), None);
     /// assert_eq!(buf_overwrite.push(3), Some(1)); // Overwrote 1
     ///
     /// // Non-overwrite mode (OVERWRITE = false)
-    /// let buf_no_overwrite: RingBuf<i32, 32, false> = RingBuf::new(2);
+    /// let mut buf_no_overwrite: RingBuf<i32, 32, false> = RingBuf::new(2);
     /// assert_eq!(buf_no_overwrite.push(1), Ok(()));
     /// assert_eq!(buf_no_overwrite.push(2), Ok(()));
     /// assert!(matches!(buf_no_overwrite.push(3), Err(RingBufError::Full(3))));
     /// ```
     #[inline]
-    pub fn push(&self, value: T) -> <PushMarker<OVERWRITE> as PushDispatch<T, N, OVERWRITE>>::PushOutput
+    pub fn push(&mut self, value: T) -> <PushMarker<OVERWRITE> as PushDispatch<T, N, OVERWRITE>>::PushOutput
     where
         PushMarker<OVERWRITE>: PushDispatch<T, N, OVERWRITE>,
     {
@@ -273,11 +345,11 @@ impl<T, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
     /// ```
     /// use smallring::generic::RingBuf;
     ///
-    /// let buf: RingBuf<i32, 32> = RingBuf::new(4); // Defaults to OVERWRITE = true
+    /// let mut buf: RingBuf<i32, 32> = RingBuf::new(4); // Defaults to OVERWRITE = true
     /// buf.push(42);
     /// assert_eq!(buf.pop().unwrap(), 42);
     /// ```
-    pub fn pop(&self) -> Result<T, RingBufError<T>> {
+    pub fn pop(&mut self) -> Result<T, RingBufError<T>> {
         let read = self.core.read_idx().load(Ordering::Relaxed);
         let write = self.core.write_idx().load(Ordering::Acquire);
         
@@ -324,7 +396,7 @@ impl<T, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
     /// ```
     /// use smallring::generic::RingBuf;
     ///
-    /// let buf: RingBuf<i32, 32> = RingBuf::new(4);
+    /// let mut buf: RingBuf<i32, 32> = RingBuf::new(4);
     /// buf.push(42);
     /// assert_eq!(buf.peek(), Some(&42));
     /// assert_eq!(buf.len(), 1); // Element still in buffer
@@ -351,9 +423,269 @@ impl<T, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
     /// This method pops and drops all elements currently in the buffer.
     /// 
     /// 此方法弹出并 drop 缓冲区中当前的所有元素。
-    pub fn clear(&self) {
+    pub fn clear(&mut self) {
         while self.pop().is_ok() {
             // Elements are dropped automatically
+        }
+    }
+}
+
+impl<T, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
+    /// Get readable data as one or two contiguous slices
+    /// 
+    /// 将可读数据作为一个或两个连续切片获取
+    /// 
+    /// Due to the circular nature of the ring buffer, data may be split into two parts.
+    /// The first slice contains data from the read position to either the end of the buffer
+    /// or the write position. The second slice (if non-empty) contains data from the 
+    /// beginning of the buffer.
+    /// 
+    /// 由于环形缓冲区的循环特性，数据可能被分成两部分。
+    /// 第一个切片包含从读位置到缓冲区末尾或写位置的数据。
+    /// 第二个切片（如果非空）包含从缓冲区开头的数据。
+    /// 
+    /// # Returns
+    /// 
+    /// A tuple of two slices `(first, second)` where:
+    /// - `first` contains the initial contiguous data
+    /// - `second` contains wrapped-around data (may be empty)
+    /// 
+    /// # 返回值
+    /// 
+    /// 返回两个切片的元组 `(first, second)`，其中：
+    /// - `first` 包含初始连续数据
+    /// - `second` 包含环绕的数据（可能为空）
+    /// 
+    /// # Safety
+    /// 
+    /// The returned slices are valid only as long as no push operations occur.
+    /// In concurrent scenarios, the slices may become stale.
+    /// 
+    /// # 安全性
+    /// 
+    /// 返回的切片仅在未发生 push 操作时有效。
+    /// 在并发场景中，切片可能变得过时。
+    /// 
+    /// # Examples
+    /// 
+    /// ```
+    /// use smallring::generic::RingBuf;
+    ///
+    /// let mut buf: RingBuf<i32, 32> = RingBuf::new(8);
+    /// buf.push(1);
+    /// buf.push(2);
+    /// buf.push(3);
+    /// 
+    /// let (first, second) = buf.as_slices();
+    /// assert_eq!(first, &[1, 2, 3]);
+    /// assert_eq!(second, &[]);
+    /// ```
+    pub fn as_slices(&self) -> (&[T], &[T]) {
+        let read = self.core.read_idx().load(Ordering::Acquire);
+        let write = self.core.write_idx().load(Ordering::Acquire);
+        
+        let len = write.wrapping_sub(read).min(self.core.capacity());
+        if len == 0 {
+            return (&[], &[]);
+        }
+        
+        let read_idx = read & self.core.mask();
+        let write_idx = write & self.core.mask();
+        
+        unsafe {
+            let buffer_ptr = self.core.buffer_ptr();
+            
+            if read_idx < write_idx || len == self.core.capacity() {
+                // Data is contiguous or buffer is full
+                if len == self.core.capacity() {
+                    // Full buffer - return two slices
+                    let first_len = self.core.capacity() - read_idx;
+                    let first = std::slice::from_raw_parts(buffer_ptr.add(read_idx), first_len);
+                    let second = if read_idx > 0 {
+                        std::slice::from_raw_parts(buffer_ptr, read_idx)
+                    } else {
+                        &[]
+                    };
+                    (first, second)
+                } else {
+                    // Data is contiguous
+                    let slice = std::slice::from_raw_parts(buffer_ptr.add(read_idx), len);
+                    (slice, &[])
+                }
+            } else {
+                // Data wraps around
+                let first_len = self.core.capacity() - read_idx;
+                let second_len = len - first_len;
+                let first = std::slice::from_raw_parts(buffer_ptr.add(read_idx), first_len);
+                let second = std::slice::from_raw_parts(buffer_ptr, second_len);
+                (first, second)
+            }
+        }
+    }
+    
+    /// Create an iterator over the elements in the buffer
+    /// 
+    /// 创建一个遍历缓冲区元素的迭代器
+    /// 
+    /// The iterator yields references to elements in FIFO order (oldest to newest).
+    /// 
+    /// 迭代器按 FIFO 顺序（从最旧到最新）返回元素的引用。
+    /// 
+    /// # Safety
+    /// 
+    /// The iterator is valid only as long as no push operations occur.
+    /// In concurrent scenarios, the iterator may see inconsistent data.
+    /// 
+    /// # 安全性
+    /// 
+    /// 迭代器仅在未发生 push 操作时有效。
+    /// 在并发场景中，迭代器可能看到不一致的数据。
+    /// 
+    /// # Examples
+    /// 
+    /// ```
+    /// use smallring::generic::RingBuf;
+    ///
+    /// let mut buf: RingBuf<i32, 32> = RingBuf::new(8);
+    /// buf.push(1);
+    /// buf.push(2);
+    /// buf.push(3);
+    /// 
+    /// let values: Vec<_> = buf.iter().copied().collect();
+    /// assert_eq!(values, vec![1, 2, 3]);
+    /// ```
+    #[inline]
+    pub fn iter(&self) -> Iter<'_, T> {
+        let (first, second) = self.as_slices();
+        Iter {
+            first: first.iter(),
+            second: second.iter(),
+        }
+    }
+    
+    /// Get mutable readable data as one or two contiguous slices
+    /// 
+    /// 将可读数据作为一个或两个可变连续切片获取
+    /// 
+    /// Due to the circular nature of the ring buffer, data may be split into two parts.
+    /// The first slice contains data from the read position to either the end of the buffer
+    /// or the write position. The second slice (if non-empty) contains data from the 
+    /// beginning of the buffer.
+    /// 
+    /// 由于环形缓冲区的循环特性，数据可能被分成两部分。
+    /// 第一个切片包含从读位置到缓冲区末尾或写位置的数据。
+    /// 第二个切片（如果非空）包含从缓冲区开头的数据。
+    /// 
+    /// # Returns
+    /// 
+    /// A tuple of two mutable slices `(first, second)` where:
+    /// - `first` contains the initial contiguous data
+    /// - `second` contains wrapped-around data (may be empty)
+    /// 
+    /// # 返回值
+    /// 
+    /// 返回两个可变切片的元组 `(first, second)`，其中：
+    /// - `first` 包含初始连续数据
+    /// - `second` 包含环绕的数据（可能为空）
+    /// 
+    /// # Examples
+    /// 
+    /// ```
+    /// use smallring::generic::RingBuf;
+    ///
+    /// let mut buf: RingBuf<i32, 32> = RingBuf::new(8);
+    /// buf.push(1);
+    /// buf.push(2);
+    /// buf.push(3);
+    /// 
+    /// let (first, second) = buf.as_mut_slices();
+    /// // Modify elements in place
+    /// for x in first.iter_mut() {
+    ///     *x *= 2;
+    /// }
+    /// for x in second.iter_mut() {
+    ///     *x *= 2;
+    /// }
+    /// 
+    /// assert_eq!(buf.pop().unwrap(), 2);
+    /// assert_eq!(buf.pop().unwrap(), 4);
+    /// assert_eq!(buf.pop().unwrap(), 6);
+    /// ```
+    pub fn as_mut_slices(&mut self) -> (&mut [T], &mut [T]) {
+        let read = self.core.read_idx().load(Ordering::Acquire);
+        let write = self.core.write_idx().load(Ordering::Acquire);
+        
+        let len = write.wrapping_sub(read).min(self.core.capacity());
+        if len == 0 {
+            return (&mut [], &mut []);
+        }
+        
+        let read_idx = read & self.core.mask();
+        let write_idx = write & self.core.mask();
+        
+        unsafe {
+            let buffer_ptr = self.core.buffer_ptr() as *mut T;
+            
+            if read_idx < write_idx || len == self.core.capacity() {
+                // Data is contiguous or buffer is full
+                if len == self.core.capacity() {
+                    // Full buffer - return two slices
+                    let first_len = self.core.capacity() - read_idx;
+                    let first = std::slice::from_raw_parts_mut(buffer_ptr.add(read_idx), first_len);
+                    let second = if read_idx > 0 {
+                        std::slice::from_raw_parts_mut(buffer_ptr, read_idx)
+                    } else {
+                        &mut []
+                    };
+                    (first, second)
+                } else {
+                    // Data is contiguous
+                    let slice = std::slice::from_raw_parts_mut(buffer_ptr.add(read_idx), len);
+                    (slice, &mut [])
+                }
+            } else {
+                // Data wraps around
+                let first_len = self.core.capacity() - read_idx;
+                let second_len = len - first_len;
+                let first = std::slice::from_raw_parts_mut(buffer_ptr.add(read_idx), first_len);
+                let second = std::slice::from_raw_parts_mut(buffer_ptr, second_len);
+                (first, second)
+            }
+        }
+    }
+    
+    /// Create a mutable iterator over the elements in the buffer
+    /// 
+    /// 创建一个遍历缓冲区元素的可变迭代器
+    /// 
+    /// The iterator yields mutable references to elements in FIFO order (oldest to newest).
+    /// 
+    /// 迭代器按 FIFO 顺序（从最旧到最新）返回元素的可变引用。
+    /// 
+    /// # Examples
+    /// 
+    /// ```
+    /// use smallring::generic::RingBuf;
+    ///
+    /// let mut buf: RingBuf<i32, 32> = RingBuf::new(8);
+    /// buf.push(1);
+    /// buf.push(2);
+    /// buf.push(3);
+    /// 
+    /// // Double all values
+    /// for x in buf.iter_mut() {
+    ///     *x *= 2;
+    /// }
+    /// 
+    /// let values: Vec<_> = buf.iter().copied().collect();
+    /// assert_eq!(values, vec![2, 4, 6]);
+    /// ```
+    #[inline]
+    pub fn iter_mut(&mut self) -> IterMut<'_, T> {
+        let (first, second) = self.as_mut_slices();
+        IterMut {
+            first: first.iter_mut(),
+            second: second.iter_mut(),
         }
     }
 }
@@ -380,7 +712,7 @@ impl<T: Copy, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
     /// # 返回值
     /// 
     /// 成功推送的元素数量（0 到 values.len()）
-    pub fn push_slice(&self, values: &[T]) -> usize {
+    pub fn push_slice(&mut self, values: &[T]) -> usize {
         if values.is_empty() {
             return 0;
         }
@@ -388,18 +720,28 @@ impl<T: Copy, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
         let write = self.core.write_idx().fetch_add(values.len(), Ordering::Relaxed);
         let read = self.core.read_idx().load(Ordering::Acquire);
         
-        let to_push = if OVERWRITE {
-            // Overwrite mode: push all elements
+        let (to_push, value_offset, overwrite_count) = if OVERWRITE {
+            // Overwrite mode: push all elements (or last capacity elements if values.len() > capacity)
             // If pushing more than capacity, advance read index
             if values.len() >= self.core.capacity() {
-                // All old data will be overwritten, set read to write - capacity
-                self.core.read_idx().store(write.wrapping_add(values.len()).wrapping_sub(self.core.capacity()), Ordering::Release);
+                // All old data will be overwritten
+                // Only keep last capacity elements from values
+                // 所有旧数据将被覆盖，只保留 values 中最后 capacity 个元素
+                let to_push = self.core.capacity();
+                let value_offset = values.len() - to_push;
+                let old_read = read;
+                self.core.read_idx().store(write.wrapping_add(values.len()).wrapping_sub(to_push), Ordering::Release);
+                // All elements in buffer will be overwritten
+                let overwrite_count = (write.wrapping_sub(old_read)).min(self.core.capacity());
+                (to_push, value_offset, overwrite_count)
             } else if write.wrapping_sub(read) + values.len() > self.core.capacity() {
                 // Partial overwrite: advance read index by overflow amount
                 let overflow = write.wrapping_sub(read) + values.len() - self.core.capacity();
                 self.core.read_idx().fetch_add(overflow, Ordering::Release);
+                (values.len(), 0, overflow)
+            } else {
+                (values.len(), 0, 0)
             }
-            values.len()
         } else {
             // Non-overwrite mode: push what fits
             let available = self.core.capacity().saturating_sub(write.wrapping_sub(read));
@@ -410,20 +752,40 @@ impl<T: Copy, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
                 self.core.write_idx().fetch_sub(values.len() - to_push, Ordering::Relaxed);
             }
             
-            to_push
+            (to_push, 0, 0)
         };
         
         if to_push == 0 {
             return 0;
         }
         
-        // Use core's batch copy functionality
-        // 使用核心模块的批量拷贝功能
-        unsafe {
-            self.core.copy_from_slice(write, values, to_push);
+        // Drop elements that will be overwritten (in overwrite mode)
+        // Drop 将被覆盖的元素（覆盖模式）
+        if OVERWRITE && overwrite_count > 0 {
+            unsafe {
+                for i in 0..overwrite_count {
+                    let idx = (write.wrapping_add(value_offset).wrapping_add(i)) & self.core.mask();
+                    let ptr = self.core.buffer_ptr_at(idx) as *mut T;
+                    std::ptr::drop_in_place(ptr);
+                }
+            }
         }
         
-        to_push
+        // Use core's batch copy functionality
+        // 使用核心模块的批量拷贝功能
+        // Copy from values[value_offset..] to buffer
+        unsafe {
+            self.core.copy_from_slice(write.wrapping_add(value_offset), &values[value_offset..], to_push);
+        }
+        
+        // Return number of elements pushed
+        // Overwrite mode: return total values.len() (all "accepted")
+        // Non-overwrite mode: return actual pushed count
+        if OVERWRITE {
+            values.len()
+        } else {
+            to_push
+        }
     }
     
     /// Pop multiple elements into a slice
@@ -437,7 +799,7 @@ impl<T: Copy, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
     /// # 返回值
     /// 
     /// 成功弹出的元素数量（0 到 dest.len()）
-    pub fn pop_slice(&self, dest: &mut [T]) -> usize {
+    pub fn pop_slice(&mut self, dest: &mut [T]) -> usize {
         if dest.is_empty() {
             return 0;
         }
@@ -493,7 +855,7 @@ mod tests {
     
     #[test]
     fn test_basic_push_pop() {
-        let buf: RingBuf<i32, 32, true> = RingBuf::new(4);
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(4);
         
         // [MODIFIED] Test updated for new push() API
         assert_eq!(buf.push(1), None);
@@ -509,7 +871,7 @@ mod tests {
     
     #[test]
     fn test_overwrite_mode() {
-        let buf: RingBuf<i32, 32, true> = RingBuf::new(4);
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(4);
         
         // [MODIFIED] Test updated for new push() API
         // Fill buffer
@@ -531,7 +893,7 @@ mod tests {
     
     #[test]
     fn test_non_overwrite_mode() {
-        let buf: RingBuf<i32, 32, false> = RingBuf::new(4);
+        let mut buf: RingBuf<i32, 32, false> = RingBuf::new(4);
         
         // [MODIFIED] Test updated for new push() API (unwrap() still works)
         // Fill buffer
@@ -552,7 +914,7 @@ mod tests {
     
     #[test]
     fn test_empty_buffer() {
-        let buf: RingBuf<i32, 32, true> = RingBuf::new(4);
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(4);
         assert!(buf.is_empty());
         assert_eq!(buf.len(), 0);
         assert!(matches!(buf.pop(), Err(RingBufError::Empty)));
@@ -560,7 +922,7 @@ mod tests {
     
     #[test]
     fn test_push_slice() {
-        let buf: RingBuf<i32, 32, true> = RingBuf::new(8);
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(8);
         
         let data = [1, 2, 3, 4, 5];
         let pushed = buf.push_slice(&data);
@@ -574,7 +936,7 @@ mod tests {
     
     #[test]
     fn test_pop_slice() {
-        let buf: RingBuf<i32, 32, true> = RingBuf::new(8);
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(8);
         
         buf.push(1);
         buf.push(2);
@@ -592,7 +954,7 @@ mod tests {
     
     #[test]
     fn test_clear() {
-        let buf: RingBuf<i32, 32, true> = RingBuf::new(8);
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(8);
         
         buf.push(1);
         buf.push(2);
@@ -605,10 +967,10 @@ mod tests {
     
     #[test]
     fn test_concurrent_access() {
-        use std::sync::Arc;
+        use std::sync::{Arc, Mutex};
         use std::thread;
         
-        let buf = Arc::new(RingBuf::<u64, 128, true>::new(128));
+        let buf = Arc::new(Mutex::new(RingBuf::<u64, 128, true>::new(128)));
         let mut handles = vec![];
         
         // Multiple writers
@@ -617,9 +979,9 @@ mod tests {
             let handle = thread::spawn(move || {
                 for i in 0..100 {
                     let value = (thread_id * 100 + i) as u64;
-                    // [MODIFIED] Test updated for new push() API
+                    // [MODIFIED] Test updated for new push() API with Mutex
                     // We don't care about the return value in this test
-                    buf_clone.push(value);
+                    buf_clone.lock().unwrap().push(value);
                 }
             });
             handles.push(handle);
@@ -630,6 +992,341 @@ mod tests {
         }
         
         // Should have written 400 elements total
-        assert_eq!(buf.len(), 128); // Only last 128 fit in buffer
+        assert_eq!(buf.lock().unwrap().len(), 128); // Only last 128 fit in buffer
+    }
+    
+    #[test]
+    fn test_peek() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(4);
+        
+        // Peek on empty buffer
+        assert_eq!(buf.peek(), None);
+        
+        // Add elements
+        buf.push(1);
+        buf.push(2);
+        buf.push(3);
+        
+        // Peek should return first element without removing it
+        assert_eq!(buf.peek(), Some(&1));
+        assert_eq!(buf.len(), 3);
+        
+        // Pop and peek again
+        assert_eq!(buf.pop().unwrap(), 1);
+        assert_eq!(buf.peek(), Some(&2));
+        assert_eq!(buf.len(), 2);
+    }
+    
+    #[test]
+    fn test_is_full() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(4);
+        
+        assert!(!buf.is_full());
+        
+        buf.push(1);
+        buf.push(2);
+        assert!(!buf.is_full());
+        
+        buf.push(3);
+        buf.push(4);
+        assert!(buf.is_full());
+        
+        buf.pop().unwrap();
+        assert!(!buf.is_full());
+    }
+    
+    #[test]
+    fn test_as_slices_contiguous() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(8);
+        
+        // Empty buffer
+        let (first, second) = buf.as_slices();
+        assert_eq!(first, &[]);
+        assert_eq!(second, &[]);
+        
+        // Add elements (contiguous)
+        buf.push(1);
+        buf.push(2);
+        buf.push(3);
+        
+        let (first, second) = buf.as_slices();
+        assert_eq!(first, &[1, 2, 3]);
+        assert_eq!(second, &[]);
+    }
+    
+    #[test]
+    fn test_as_slices_wrapped() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(4);
+        
+        // Fill and wrap around
+        buf.push(1);
+        buf.push(2);
+        buf.push(3);
+        buf.push(4);
+        
+        // Pop some elements to create gap
+        buf.pop().unwrap();
+        buf.pop().unwrap();
+        
+        // Add more to wrap around
+        buf.push(5);
+        buf.push(6);
+        
+        let (first, second) = buf.as_slices();
+        assert_eq!(first.len() + second.len(), 4);
+        
+        // Verify we can read all elements
+        let mut all_elements = Vec::new();
+        all_elements.extend_from_slice(first);
+        all_elements.extend_from_slice(second);
+        assert_eq!(all_elements, vec![3, 4, 5, 6]);
+    }
+    
+    #[test]
+    fn test_iter() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(8);
+        
+        // Empty iterator
+        assert_eq!(buf.iter().count(), 0);
+        
+        // Add elements
+        buf.push(1);
+        buf.push(2);
+        buf.push(3);
+        buf.push(4);
+        
+        // Collect iterator
+        let values: Vec<_> = buf.iter().copied().collect();
+        assert_eq!(values, vec![1, 2, 3, 4]);
+        
+        // Test ExactSizeIterator
+        let iter = buf.iter();
+        assert_eq!(iter.len(), 4);
+    }
+    
+    #[test]
+    fn test_iter_double_ended() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(8);
+        
+        buf.push(1);
+        buf.push(2);
+        buf.push(3);
+        buf.push(4);
+        
+        // Test reverse iteration
+        let values: Vec<_> = buf.iter().rev().copied().collect();
+        assert_eq!(values, vec![4, 3, 2, 1]);
+        
+        // Test mixed forward/backward
+        let mut iter = buf.iter();
+        assert_eq!(iter.next(), Some(&1));
+        assert_eq!(iter.next_back(), Some(&4));
+        assert_eq!(iter.next(), Some(&2));
+        assert_eq!(iter.next_back(), Some(&3));
+        assert_eq!(iter.next(), None);
+    }
+    
+    #[test]
+    fn test_push_slice_overwrite() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(4);
+        
+        // Fill buffer
+        buf.push(1);
+        buf.push(2);
+        buf.push(3);
+        buf.push(4);
+        
+        // Push slice that causes overwrite
+        let data = [5, 6, 7];
+        let pushed = buf.push_slice(&data);
+        assert_eq!(pushed, 3);
+        
+        // Should have [4, 5, 6, 7] now (1, 2, 3 overwritten)
+        assert_eq!(buf.pop().unwrap(), 4);
+        assert_eq!(buf.pop().unwrap(), 5);
+        assert_eq!(buf.pop().unwrap(), 6);
+        assert_eq!(buf.pop().unwrap(), 7);
+    }
+    
+    #[test]
+    fn test_push_slice_non_overwrite() {
+        let mut buf: RingBuf<i32, 32, false> = RingBuf::new(4);
+        
+        // Fill buffer
+        buf.push(1).unwrap();
+        buf.push(2).unwrap();
+        
+        // Try to push more than available space
+        let data = [3, 4, 5, 6];
+        let pushed = buf.push_slice(&data);
+        assert_eq!(pushed, 2); // Only 2 elements fit
+        
+        // Should have [1, 2, 3, 4]
+        assert_eq!(buf.len(), 4);
+        assert!(buf.is_full());
+    }
+    
+    #[test]
+    fn test_empty_slice_operations() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(4);
+        
+        // Push empty slice
+        let pushed = buf.push_slice(&[]);
+        assert_eq!(pushed, 0);
+        
+        // Pop into empty slice
+        buf.push(1);
+        buf.push(2);
+        
+        let mut dest = [];
+        let popped = buf.pop_slice(&mut dest);
+        assert_eq!(popped, 0);
+        assert_eq!(buf.len(), 2);
+    }
+    
+    #[test]
+    fn test_as_mut_slices_contiguous() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(8);
+        
+        // Empty buffer
+        let (first, second) = buf.as_mut_slices();
+        assert_eq!(first.len(), 0);
+        assert_eq!(second.len(), 0);
+        
+        // Add elements (contiguous)
+        buf.push(1);
+        buf.push(2);
+        buf.push(3);
+        
+        let (first, second) = buf.as_mut_slices();
+        assert_eq!(first, &[1, 2, 3]);
+        assert_eq!(second, &[]);
+        
+        // Modify elements
+        for x in first.iter_mut() {
+            *x *= 10;
+        }
+        
+        assert_eq!(buf.pop().unwrap(), 10);
+        assert_eq!(buf.pop().unwrap(), 20);
+        assert_eq!(buf.pop().unwrap(), 30);
+    }
+    
+    #[test]
+    fn test_as_mut_slices_wrapped() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(4);
+        
+        // Fill and wrap around
+        buf.push(1);
+        buf.push(2);
+        buf.push(3);
+        buf.push(4);
+        
+        // Pop some elements to create gap
+        buf.pop().unwrap();
+        buf.pop().unwrap();
+        
+        // Add more to wrap around
+        buf.push(5);
+        buf.push(6);
+        
+        let (first, second) = buf.as_mut_slices();
+        assert_eq!(first.len() + second.len(), 4);
+        
+        // Modify all elements
+        for x in first.iter_mut() {
+            *x += 100;
+        }
+        for x in second.iter_mut() {
+            *x += 100;
+        }
+        
+        // Verify modifications
+        assert_eq!(buf.pop().unwrap(), 103);
+        assert_eq!(buf.pop().unwrap(), 104);
+        assert_eq!(buf.pop().unwrap(), 105);
+        assert_eq!(buf.pop().unwrap(), 106);
+    }
+    
+    #[test]
+    fn test_iter_mut() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(8);
+        
+        // Add elements
+        buf.push(1);
+        buf.push(2);
+        buf.push(3);
+        buf.push(4);
+        
+        // Double all values using iter_mut
+        for x in buf.iter_mut() {
+            *x *= 2;
+        }
+        
+        // Collect and verify
+        let values: Vec<_> = buf.iter().copied().collect();
+        assert_eq!(values, vec![2, 4, 6, 8]);
+        
+        // Test ExactSizeIterator
+        let iter = buf.iter_mut();
+        assert_eq!(iter.len(), 4);
+    }
+    
+    #[test]
+    fn test_iter_mut_double_ended() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(8);
+        
+        buf.push(1);
+        buf.push(2);
+        buf.push(3);
+        buf.push(4);
+        
+        // Test reverse iteration with modification
+        for x in buf.iter_mut().rev() {
+            *x += 10;
+        }
+        
+        let values: Vec<_> = buf.iter().copied().collect();
+        assert_eq!(values, vec![11, 12, 13, 14]);
+        
+        // Test mixed forward/backward
+        let mut iter = buf.iter_mut();
+        if let Some(x) = iter.next() {
+            *x = 100;
+        }
+        if let Some(x) = iter.next_back() {
+            *x = 200;
+        }
+        
+        let values: Vec<_> = buf.iter().copied().collect();
+        assert_eq!(values, vec![100, 12, 13, 200]);
+    }
+    
+    #[test]
+    fn test_iter_mut_empty() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(4);
+        
+        let mut iter = buf.iter_mut();
+        assert_eq!(iter.next(), None);
+        assert_eq!(iter.len(), 0);
+    }
+    
+    #[test]
+    fn test_iter_mut_wrapped() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(4);
+        
+        // Fill and wrap
+        for i in 0..8 {
+            buf.push(i);
+        }
+        
+        // Should contain [4, 5, 6, 7]
+        // Multiply all by 10
+        for x in buf.iter_mut() {
+            *x *= 10;
+        }
+        
+        let values: Vec<i32> = buf.iter().copied().collect();
+        assert_eq!(values, vec![40, 50, 60, 70]);
     }
 }

@@ -145,6 +145,23 @@ impl<T, const N: usize> FixedVec<T, N> {
         self.len = new_len;
     }
     
+    /// Get a pointer to the beginning of the buffer
+    /// 
+    /// 获取指向缓冲区开头的指针
+    /// 
+    /// # Returns
+    /// A const pointer to the first element (MaybeUninit<T>)
+    /// 
+    /// # 返回值
+    /// 指向第一个元素的常量指针（MaybeUninit<T>）
+    #[inline]
+    pub fn as_ptr(&self) -> *const MaybeUninit<T> {
+        match &self.storage {
+            Storage::Stack(arr) => arr.as_ptr(),
+            Storage::Heap(boxed) => boxed.as_ptr(),
+        }
+    }
+    
     /// Get a pointer to the element at the specified index (unchecked, fast path)
     /// 
     /// 获取指定索引处元素的指针（无检查，快速路径）
