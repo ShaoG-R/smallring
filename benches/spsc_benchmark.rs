@@ -8,7 +8,7 @@
 /// 3. 不同容量下的表现
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use smallring::ringbuf;
+use smallring::spsc;
 use std::num::NonZero;
 use std::time::Duration;
 use std::hint::black_box;
@@ -27,7 +27,7 @@ fn benchmark_creation(c: &mut Criterion) {
             &capacity,
             |b, &cap| {
                 b.iter(|| {
-                    let (producer, consumer) = ringbuf::new::<u64, 32>(NonZero::new(cap).unwrap());
+                    let (producer, consumer) = spsc::new::<u64, 32>(NonZero::new(cap).unwrap());
                     black_box((producer, consumer));
                 });
             },
@@ -65,7 +65,7 @@ fn benchmark_single_thread_throughput(c: &mut Criterion) {
             &capacity,
             |b, &cap| {
                 b.iter(|| {
-                    let (mut producer, mut consumer) = ringbuf::new::<u64, 32>(NonZero::new(cap).unwrap());
+                    let (mut producer, mut consumer) = spsc::new::<u64, 32>(NonZero::new(cap).unwrap());
                     
                     for i in 0..operations {
                         // Fill buffer as much as possible
@@ -110,7 +110,7 @@ fn benchmark_batch_operations(c: &mut Criterion) {
     // Custom SmallVec-based RingBuf - batch push then batch pop
     group.bench_function("custom_smallvec_batch", |b| {
         b.iter(|| {
-            let (mut producer, mut consumer) = ringbuf::new::<u64, 32>(NonZero::new(capacity).unwrap());
+            let (mut producer, mut consumer) = spsc::new::<u64, 32>(NonZero::new(capacity).unwrap());
             
             // Push batch
             for i in 0..batch_size {
@@ -157,7 +157,7 @@ fn benchmark_concurrent(c: &mut Criterion) {
     // Custom SmallVec-based RingBuf
     group.bench_function("custom_smallvec_concurrent", |b| {
         b.iter(|| {
-            let (mut producer, mut consumer) = ringbuf::new::<u64, 32>(NonZero::new(capacity).unwrap());
+            let (mut producer, mut consumer) = spsc::new::<u64, 32>(NonZero::new(capacity).unwrap());
             
             let producer_handle = std::thread::spawn(move || {
                 for i in 0..messages {
@@ -234,7 +234,7 @@ fn benchmark_small_capacity_advantage(c: &mut Criterion) {
     group.bench_function("custom_smallvec_create_destroy_32", |b| {
         b.iter(|| {
             for _ in 0..iterations {
-                let (mut producer, mut consumer) = ringbuf::new::<u64, 32>(NonZero::new(capacity).unwrap());
+                let (mut producer, mut consumer) = spsc::new::<u64, 32>(NonZero::new(capacity).unwrap());
                 
                 // Do some work
                 producer.push(42).unwrap();
@@ -274,7 +274,7 @@ fn benchmark_push_only(c: &mut Criterion) {
     // Custom SmallVec-based RingBuf
     group.bench_function("custom_smallvec_push", |b| {
         b.iter(|| {
-            let (mut producer, _consumer) = ringbuf::new::<u64, 32>(NonZero::new(capacity).unwrap());
+            let (mut producer, _consumer) = spsc::new::<u64, 32>(NonZero::new(capacity).unwrap());
             
             for i in 0..push_count {
                 producer.push(black_box(i)).unwrap();
@@ -309,7 +309,7 @@ fn benchmark_pop_only(c: &mut Criterion) {
     group.bench_function("custom_smallvec_pop", |b| {
         b.iter_batched(
             || {
-                let (mut producer, consumer) = ringbuf::new::<u64, 32>(NonZero::new(capacity).unwrap());
+                let (mut producer, consumer) = spsc::new::<u64, 32>(NonZero::new(capacity).unwrap());
                 for i in 0..items {
                     producer.push(i).unwrap();
                 }

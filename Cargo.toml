@@ -20,5 +20,5 @@ criterion = { version = "0.7.0", features = ["async_tokio"] }
 rtrb = "0.3.2"
 
 [[bench]]
-name = "ringbuf_benchmark"
+name = "spsc_benchmark"
 harness = false

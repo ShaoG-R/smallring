@@ -7,9 +7,9 @@
 /// 
 /// 此实现使用 FixedVec 在栈上存储小容量数据（≤32），避免堆分配开销，提升 `new()` 性能。
 use std::num::NonZero;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use super::vec::FixedVec;
+use super::core::RingBufCore;
 
 /// Ring buffer error for push operations
 /// 
@@ -45,30 +45,10 @@ pub enum PopError {
 /// - `T`: 元素类型
 /// - `N`: 栈容量阈值（当容量 ≤ N 时元素存储在栈上）
 pub struct SharedData<T, const N: usize> {
-    /// Buffer storage using FixedVec for stack allocation optimization
+    /// Core ring buffer implementation
     /// 
-    /// 使用 FixedVec 的缓冲区存储，优化栈分配
-    buffer: FixedVec<T, N>,
-    
-    /// Actual capacity (power of 2)
-    /// 
-    /// 实际容量（2 的幂次）
-    capacity: usize,
-    
-    /// Mask for fast modulo operation (capacity - 1)
-    /// 
-    /// 快速取模运算的掩码（capacity - 1）
-    mask: usize,
-    
-    /// Write index (accessed by producer, read by consumer)
-    /// 
-    /// 写入索引（由生产者访问，由消费者读取）
-    write_idx: AtomicUsize,
-    
-    /// Read index (accessed by consumer, read by producer)
-    /// 
-    /// 读取索引（由消费者访问，由生产者读取）
-    read_idx: AtomicUsize,
+    /// 核心环形缓冲区实现
+    core: RingBufCore<T, N>,
 }
 
 /// Producer half of the ring buffer
@@ -157,7 +137,7 @@ impl<T, const N: usize> SharedData<T, N> {
     /// 获取缓冲区容量
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.capacity
+        self.core.capacity()
     }
 }
 
@@ -185,23 +165,10 @@ impl<T, const N: usize> SharedData<T, N> {
 /// # 返回值
 /// 返回 (Producer, Consumer) 元组
 pub fn new<T, const N: usize>(capacity: NonZero<usize>) -> (Producer<T, N>, Consumer<T, N>) {
-        
-        // Round up to next power of 2 for efficient masking
-        // 向上取整到下一个 2 的幂次以实现高效的掩码操作
-        let actual_capacity = capacity.get().next_power_of_two();
-        let mask = actual_capacity - 1;
-        
-        let mut buffer = FixedVec::with_capacity(actual_capacity);
-        unsafe {
-            buffer.set_len(actual_capacity);
-        }
+        let core = RingBufCore::new(capacity.get());
         
         let shared = Arc::new(SharedData {
-            buffer,
-            capacity: actual_capacity,
-            mask,
-            write_idx: AtomicUsize::new(0),
-            read_idx: AtomicUsize::new(0),
+            core,
         });
         
         let producer = Producer {
@@ -223,7 +190,7 @@ impl<T, const N: usize> Producer<T, N> {
     /// 获取缓冲区容量
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.shared.capacity
+        self.shared.core.capacity()
     }
     
     /// Get the number of elements currently in the buffer
@@ -231,8 +198,8 @@ impl<T, const N: usize> Producer<T, N> {
     /// 获取缓冲区中当前的元素数量
     #[inline]
     pub fn slots(&self) -> usize {
-        let write = self.shared.write_idx.load(Ordering::Relaxed);
-        let read = self.shared.read_idx.load(Ordering::Acquire);
+        let write = self.shared.core.write_idx().load(Ordering::Relaxed);
+        let read = self.shared.core.read_idx().load(Ordering::Acquire);
         write.wrapping_sub(read)
     }
     
@@ -249,8 +216,8 @@ impl<T, const N: usize> Producer<T, N> {
     /// 检查缓冲区是否为空
     #[inline]
     pub fn is_empty(&self) -> bool {
-        let write = self.shared.write_idx.load(Ordering::Relaxed);
-        let read = self.shared.read_idx.load(Ordering::Acquire);
+        let write = self.shared.core.write_idx().load(Ordering::Relaxed);
+        let read = self.shared.core.read_idx().load(Ordering::Acquire);
         write == read
     }
     
@@ -259,7 +226,7 @@ impl<T, const N: usize> Producer<T, N> {
     /// 获取缓冲区中的空闲空间数量
     #[inline]
     pub fn free_slots(&self) -> usize {
-        self.shared.capacity - self.slots()
+        self.shared.core.capacity() - self.slots()
     }
     
     /// Check if the buffer is full
@@ -267,9 +234,9 @@ impl<T, const N: usize> Producer<T, N> {
     /// 检查缓冲区是否已满
     #[inline]
     pub fn is_full(&self) -> bool {
-        let write = self.shared.write_idx.load(Ordering::Relaxed);
-        let read = self.shared.read_idx.load(Ordering::Acquire);
-        write.wrapping_sub(read) >= self.shared.capacity
+        let write = self.shared.core.write_idx().load(Ordering::Relaxed);
+        let read = self.shared.core.read_idx().load(Ordering::Acquire);
+        write.wrapping_sub(read) >= self.shared.core.capacity()
     }
     
     /// Push a value into the buffer
@@ -283,33 +250,32 @@ impl<T, const N: usize> Producer<T, N> {
     /// 如果缓冲区满则返回 `PushError::Full`
     #[inline]
     pub fn push(&mut self, value: T) -> Result<(), PushError<T>> {
-        let write = self.shared.write_idx.load(Ordering::Relaxed);
+        let write = self.shared.core.write_idx().load(Ordering::Relaxed);
         let mut read = self.cached_read;
         
         // Check if buffer is full
         // 检查缓冲区是否已满
-        if write.wrapping_sub(read) >= self.shared.capacity {
+        if write.wrapping_sub(read) >= self.shared.core.capacity() {
             // Update cached read index from consumer
             // 从消费者更新缓存的读索引
-            read = self.shared.read_idx.load(Ordering::Acquire);
+            read = self.shared.core.read_idx().load(Ordering::Acquire);
             self.cached_read = read;
             
-            if write.wrapping_sub(read) >= self.shared.capacity {
+            if write.wrapping_sub(read) >= self.shared.core.capacity() {
                 return Err(PushError::Full(value));
             }
         }
         
         // Write value to buffer
         // 将值写入缓冲区
-        let index = write & self.shared.mask;
+        let index = write & self.shared.core.mask();
         unsafe {
-            let ptr = self.shared.buffer.get_unchecked_ptr(index).cast::<T>() as *mut T;
-            ptr.write(value);
+            self.shared.core.write_at(index, value);
         }
         
         // Update write index with Release ordering to ensure visibility
         // 使用 Release 顺序更新写索引以确保可见性
-        self.shared.write_idx.store(write.wrapping_add(1), Ordering::Release);
+        self.shared.core.write_idx().store(write.wrapping_add(1), Ordering::Release);
         
         Ok(())
     }
@@ -350,19 +316,19 @@ impl<T: Copy, const N: usize> Producer<T, N> {
             return 0;
         }
         
-        let write = self.shared.write_idx.load(Ordering::Relaxed);
+        let write = self.shared.core.write_idx().load(Ordering::Relaxed);
         let mut read = self.cached_read;
         
         // Calculate available space
         // 计算可用空间
-        let mut available = self.shared.capacity.saturating_sub(write.wrapping_sub(read));
+        let mut available = self.shared.core.capacity().saturating_sub(write.wrapping_sub(read));
         
         if available == 0 {
             // Update cached read index
             // 更新缓存的读索引
-            read = self.shared.read_idx.load(Ordering::Acquire);
+            read = self.shared.core.read_idx().load(Ordering::Acquire);
             self.cached_read = read;
-            available = self.shared.capacity.saturating_sub(write.wrapping_sub(read));
+            available = self.shared.core.capacity().saturating_sub(write.wrapping_sub(read));
             
             if available == 0 {
                 return 0;
@@ -372,39 +338,16 @@ impl<T: Copy, const N: usize> Producer<T, N> {
         // Determine how many elements we can push
         // 确定我们可以推送多少元素
         let to_push = available.min(values.len());
-        let start_index = write & self.shared.mask;
         
-        // Handle potential wrap-around
-        // 处理可能的环绕
-        let end_index = (write + to_push) & self.shared.mask;
-        
+        // Use core's batch copy functionality
+        // 使用核心模块的批量拷贝功能
         unsafe {
-            if start_index < end_index || to_push <= self.shared.capacity - start_index {
-                // No wrap-around: single continuous copy
-                // 无环绕：单次连续拷贝
-                let dst = self.shared.buffer.get_unchecked_ptr(start_index).cast::<T>() as *mut T;
-                std::ptr::copy_nonoverlapping(values.as_ptr(), dst, to_push);
-            } else {
-                // Wrap-around: two copies
-                // 环绕：两次拷贝
-                let first_part = self.shared.capacity - start_index;
-                let second_part = to_push - first_part;
-                
-                // Copy first part (from start_index to end of buffer)
-                // 拷贝第一部分（从 start_index 到缓冲区末尾）
-                let dst1 = self.shared.buffer.get_unchecked_ptr(start_index).cast::<T>() as *mut T;
-                std::ptr::copy_nonoverlapping(values.as_ptr(), dst1, first_part);
-                
-                // Copy second part (from beginning of buffer)
-                // 拷贝第二部分（从缓冲区开头）
-                let dst2 = self.shared.buffer.get_unchecked_ptr(0).cast::<T>() as *mut T;
-                std::ptr::copy_nonoverlapping(values.as_ptr().add(first_part), dst2, second_part);
-            }
+            self.shared.core.copy_from_slice(write, values, to_push);
         }
         
         // Update write index with Release ordering
         // 使用 Release 顺序更新写索引
-        self.shared.write_idx.store(write.wrapping_add(to_push), Ordering::Release);
+        self.shared.core.write_idx().store(write.wrapping_add(to_push), Ordering::Release);
         
         to_push
     }
@@ -422,7 +365,7 @@ impl<T, const N: usize> Consumer<T, N> {
     /// 如果缓冲区空则返回 `PopError::Empty`
     #[inline]
     pub fn pop(&mut self) -> Result<T, PopError> {
-        let read = self.shared.read_idx.load(Ordering::Relaxed);
+        let read = self.shared.core.read_idx().load(Ordering::Relaxed);
         let mut write = self.cached_write;
         
         // Check if buffer is empty
@@ -430,7 +373,7 @@ impl<T, const N: usize> Consumer<T, N> {
         if read == write {
             // Update cached write index from producer
             // 从生产者更新缓存的写索引
-            write = self.shared.write_idx.load(Ordering::Acquire);
+            write = self.shared.core.write_idx().load(Ordering::Acquire);
             self.cached_write = write;
             
             if read == write {
@@ -440,15 +383,14 @@ impl<T, const N: usize> Consumer<T, N> {
         
         // Read value from buffer
         // 从缓冲区读取值
-        let index = read & self.shared.mask;
+        let index = read & self.shared.core.mask();
         let value = unsafe {
-            let ptr = self.shared.buffer.get_unchecked_ptr(index).cast::<T>();
-            ptr.read()
+            self.shared.core.read_at(index)
         };
         
         // Update read index with Release ordering to ensure visibility
         // 使用 Release 顺序更新读索引以确保可见性
-        self.shared.read_idx.store(read.wrapping_add(1), Ordering::Release);
+        self.shared.core.read_idx().store(read.wrapping_add(1), Ordering::Release);
         
         Ok(value)
     }
@@ -458,8 +400,8 @@ impl<T, const N: usize> Consumer<T, N> {
     /// 检查缓冲区是否为空
     #[inline]
     pub fn is_empty(&self) -> bool {
-        let read = self.shared.read_idx.load(Ordering::Relaxed);
-        let write = self.shared.write_idx.load(Ordering::Acquire);
+        let read = self.shared.core.read_idx().load(Ordering::Relaxed);
+        let write = self.shared.core.write_idx().load(Ordering::Acquire);
         read == write
     }
     
@@ -468,8 +410,8 @@ impl<T, const N: usize> Consumer<T, N> {
     /// 获取缓冲区中当前的元素数量
     #[inline]
     pub fn slots(&self) -> usize {
-        let read = self.shared.read_idx.load(Ordering::Relaxed);
-        let write = self.shared.write_idx.load(Ordering::Acquire);
+        let read = self.shared.core.read_idx().load(Ordering::Relaxed);
+        let write = self.shared.core.write_idx().load(Ordering::Acquire);
         write.wrapping_sub(read)
     }
     
@@ -486,7 +428,7 @@ impl<T, const N: usize> Consumer<T, N> {
     /// 获取缓冲区容量
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.shared.capacity
+        self.shared.core.capacity()
     }
     
     /// Peek at the first element without removing it
@@ -507,17 +449,16 @@ impl<T, const N: usize> Consumer<T, N> {
     /// 返回的引用仅在未对 Consumer 执行可能修改缓冲区的其他操作时有效。
     #[inline]
     pub fn peek(&self) -> Option<&T> {
-        let read = self.shared.read_idx.load(Ordering::Relaxed);
-        let write = self.shared.write_idx.load(Ordering::Acquire);
+        let read = self.shared.core.read_idx().load(Ordering::Relaxed);
+        let write = self.shared.core.write_idx().load(Ordering::Acquire);
         
         if read == write {
             return None;
         }
         
-        let index = read & self.shared.mask;
+        let index = read & self.shared.core.mask();
         unsafe {
-            let ptr = self.shared.buffer.get_unchecked_ptr(index).cast::<T>();
-            Some(&*ptr)
+            Some(self.shared.core.peek_at(index))
         }
     }
     
@@ -609,7 +550,7 @@ impl<T: Copy, const N: usize> Consumer<T, N> {
             return 0;
         }
         
-        let read = self.shared.read_idx.load(Ordering::Relaxed);
+        let read = self.shared.core.read_idx().load(Ordering::Relaxed);
         let mut write = self.cached_write;
         
         // Calculate available elements
@@ -619,7 +560,7 @@ impl<T: Copy, const N: usize> Consumer<T, N> {
         if available == 0 {
             // Update cached write index
             // 更新缓存的写索引
-            write = self.shared.write_idx.load(Ordering::Acquire);
+            write = self.shared.core.write_idx().load(Ordering::Acquire);
             self.cached_write = write;
             available = write.wrapping_sub(read);
             
@@ -631,39 +572,16 @@ impl<T: Copy, const N: usize> Consumer<T, N> {
         // Determine how many elements we can pop
         // 确定我们可以弹出多少元素
         let to_pop = available.min(dest.len());
-        let start_index = read & self.shared.mask;
         
-        // Handle potential wrap-around
-        // 处理可能的环绕
-        let end_index = (read + to_pop) & self.shared.mask;
-        
+        // Use core's batch copy functionality
+        // 使用核心模块的批量拷贝功能
         unsafe {
-            if start_index < end_index || to_pop <= self.shared.capacity - start_index {
-                // No wrap-around: single continuous copy
-                // 无环绕：单次连续拷贝
-                let src = self.shared.buffer.get_unchecked_ptr(start_index).cast::<T>();
-                std::ptr::copy_nonoverlapping(src, dest.as_mut_ptr(), to_pop);
-            } else {
-                // Wrap-around: two copies
-                // 环绕：两次拷贝
-                let first_part = self.shared.capacity - start_index;
-                let second_part = to_pop - first_part;
-                
-                // Copy first part (from start_index to end of buffer)
-                // 拷贝第一部分（从 start_index 到缓冲区末尾）
-                let src1 = self.shared.buffer.get_unchecked_ptr(start_index).cast::<T>();
-                std::ptr::copy_nonoverlapping(src1, dest.as_mut_ptr(), first_part);
-                
-                // Copy second part (from beginning of buffer)
-                // 拷贝第二部分（从缓冲区开头）
-                let src2 = self.shared.buffer.get_unchecked_ptr(0).cast::<T>();
-                std::ptr::copy_nonoverlapping(src2, dest.as_mut_ptr().add(first_part), second_part);
-            }
+            self.shared.core.copy_to_slice(read, dest, to_pop);
         }
         
         // Update read index with Release ordering
         // 使用 Release 顺序更新读索引
-        self.shared.read_idx.store(read.wrapping_add(to_pop), Ordering::Release);
+        self.shared.core.read_idx().store(read.wrapping_add(to_pop), Ordering::Release);
         
         to_pop
     }
@@ -679,6 +597,8 @@ impl<T, const N: usize> Drop for Consumer<T, N> {
         }
     }
 }
+
+
 
 #[cfg(test)]
 mod tests {

@@ -247,7 +247,7 @@
 //! - 仅支持单生产者单消费者（SPSC）场景
 //! - `Consumer` 被 drop 时会自动清理缓冲区中的剩余元素
 
-pub mod ringbuf;
+pub mod spsc;
+pub mod generic;
 mod vec;
-
-pub use ringbuf::*;
+mod core;
