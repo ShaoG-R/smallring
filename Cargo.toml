@@ -1,6 +1,6 @@
 [package]
 name = "smallring"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 authors = ["ShaoG <shaog.rs@gmail.com>"]
 description = "High-performance SPSC ring buffer with automatic stack/heap optimization | 高性能 SPSC 环形缓冲区，支持栈/堆自动优化"
