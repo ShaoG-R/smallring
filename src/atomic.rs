@@ -11,6 +11,7 @@
 
 use super::core::RingBufCore;
 use std::sync::atomic::Ordering;
+use std::fmt;
 
 /// Trait for types that support atomic operations
 /// 
@@ -612,6 +613,18 @@ impl<T: AtomicElement + AtomicNumeric, const N: usize, const OVERWRITE: bool> At
     pub unsafe fn fetch_sub_at(&self, offset: usize, val: T::Primitive, order: Ordering) -> T::Primitive {
         let element = unsafe { self.get_unchecked(offset) };
         element.fetch_sub(val, order)
+    }
+}
+
+impl<T: AtomicElement, const N: usize, const OVERWRITE: bool> fmt::Debug for AtomicRingBuf<T, N, OVERWRITE> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AtomicRingBuf")
+            .field("capacity", &self.core.capacity())
+            .field("len", &self.core.len())
+            .field("is_empty", &self.core.is_empty())
+            .field("is_full", &self.core.is_full())
+            .field("overwrite_mode", &OVERWRITE)
+            .finish()
     }
 }
 

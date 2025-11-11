@@ -18,6 +18,7 @@
 
 use super::core::RingBufCore;
 use std::sync::atomic::Ordering;
+use std::fmt;
 
 /// Iterator over ring buffer elements
 /// 
@@ -796,6 +797,18 @@ impl<T: Copy, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
         self.core.read_idx().fetch_add(to_pop, Ordering::Release);
         
         to_pop
+    }
+}
+
+impl<T: fmt::Debug, const N: usize, const OVERWRITE: bool> fmt::Debug for RingBuf<T, N, OVERWRITE> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RingBuf")
+            .field("capacity", &self.core.capacity())
+            .field("len", &self.core.len())
+            .field("is_empty", &self.core.is_empty())
+            .field("is_full", &self.core.is_full())
+            .field("overwrite_mode", &OVERWRITE)
+            .finish()
     }
 }
 

@@ -10,6 +10,7 @@ use std::num::NonZero;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use super::core::RingBufCore;
+use std::fmt;
 
 /// Ring buffer error for push operations
 /// 
@@ -184,6 +185,18 @@ pub fn new<T, const N: usize>(capacity: NonZero<usize>) -> (Producer<T, N>, Cons
         (producer, consumer)
 }
 
+impl<T: fmt::Debug, const N: usize> fmt::Debug for Producer<T, N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Producer")
+            .field("capacity", &self.shared.core.capacity())
+            .field("slots", &self.slots())
+            .field("free_slots", &self.free_slots())
+            .field("is_empty", &self.is_empty())
+            .field("is_full", &self.is_full())
+            .finish()
+    }
+}
+
 impl<T, const N: usize> Producer<T, N> {
     /// Get the capacity of the buffer
     /// 
@@ -350,6 +363,16 @@ impl<T: Copy, const N: usize> Producer<T, N> {
         self.shared.core.write_idx().store(write.wrapping_add(to_push), Ordering::Release);
         
         to_push
+    }
+}
+
+impl<T: fmt::Debug, const N: usize> fmt::Debug for Consumer<T, N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Consumer")
+            .field("capacity", &self.shared.core.capacity())
+            .field("slots", &self.slots())
+            .field("is_empty", &self.is_empty())
+            .finish()
     }
 }
 

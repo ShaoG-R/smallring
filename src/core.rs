@@ -15,6 +15,7 @@
 use super::vec::FixedVec;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::ptr;
+use std::fmt;
 
 /// Core ring buffer storage structure
 /// 
@@ -414,6 +415,17 @@ impl<T: Copy, const N: usize> RingBufCore<T, N> {
                 ptr::copy_nonoverlapping(src2, dest.as_mut_ptr().add(first_part), second_part);
             }
         }
+    }
+}
+
+impl<T: fmt::Debug, const N: usize> fmt::Debug for RingBufCore<T, N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RingBufCore")
+            .field("capacity", &self.capacity)
+            .field("mask", &self.mask)
+            .field("write_idx", &self.write_idx.load(Ordering::Relaxed))
+            .field("read_idx", &self.read_idx.load(Ordering::Relaxed))
+            .finish()
     }
 }
 

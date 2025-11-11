@@ -10,6 +10,7 @@
 /// 当容量 > N 时在堆上存储数据。与 SmallVec 不同，此类型不支持动态调整大小。
 use std::mem::MaybeUninit;
 use std::ops::{Index, IndexMut};
+use std::fmt;
 
 /// Fixed-capacity vector that optimizes for small sizes
 /// 
@@ -250,6 +251,19 @@ impl<T, const N: usize> IndexMut<usize> for FixedVec<T, N> {
 // 
 // 注意：FixedVec 不实现 Drop，因为它存储 MaybeUninit<T>。
 // 调用者负责正确释放已初始化的元素。
+
+impl<T: fmt::Debug, const N: usize> fmt::Debug for FixedVec<T, N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FixedVec")
+            .field("len", &self.len)
+            .field("capacity", &self.capacity)
+            .field("storage", match &self.storage {
+                Storage::Stack(_) => &"Stack",
+                Storage::Heap(_) => &"Heap",
+            })
+            .finish()
+    }
+}
 
 // Ensure FixedVec is Send and Sync if T is Send and Sync
 // 如果 T 是 Send 和 Sync，则确保 FixedVec 也是 Send 和 Sync
