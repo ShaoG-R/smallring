@@ -532,6 +532,7 @@
 // 公开模块
 pub mod spsc;
 pub mod generic;
+pub mod atomic;
 
 // Internal modules
 // 内部模块
