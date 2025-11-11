@@ -489,7 +489,7 @@ impl<T, const N: usize> Consumer<T, N> {
     /// # Examples
     /// 
     /// ```
-    /// use smallring::new;
+    /// use smallring::spsc::new;
     /// use std::num::NonZero;
     /// 
     /// let (mut producer, mut consumer) = new::<i32, 32>(NonZero::new(8).unwrap());

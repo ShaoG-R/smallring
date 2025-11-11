@@ -70,7 +70,7 @@
 //! 
 //! // SPSC ring buffer for thread-safe communication
 //! // 用于线程安全通信的 SPSC 环形缓冲区
-//! use smallring::new;
+//! use smallring::spsc::new;
 //! use std::num::NonZero;
 //! use std::thread;
 //! 
