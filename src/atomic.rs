@@ -22,7 +22,7 @@ use std::fmt;
 /// 
 /// 此 trait 抽象了原子操作，允许在不同原子类型上实现泛型
 /// (AtomicU8, AtomicU64, AtomicUsize 等)
-pub trait AtomicElement: Send + Sync + Default {
+pub trait AtomicElement: Send + Sync {
     /// The underlying primitive type
     /// 
     /// 底层原始类型
@@ -232,18 +232,9 @@ impl<T: AtomicElement, const N: usize, const OVERWRITE: bool> AtomicRingBuf<T, N
     /// Create a new atomic ring buffer
     /// 
     /// 创建新的原子环形缓冲区
+    #[inline]
     pub fn new(capacity: usize) -> Self {
-        let core = RingBufCore::new(capacity);
-        
-        // Initialize all slots with default values
-        // SAFETY: We are initializing each slot within the valid capacity range
-        unsafe {
-            for i in 0..core.capacity() {
-                core.write_at(i, T::default());
-            }
-        }
-        
-        Self { core }
+        Self { core: RingBufCore::new(capacity) }
     }
     
     /// Get capacity
