@@ -28,11 +28,6 @@ pub trait AtomicElement: Send + Sync {
     /// 底层原始类型
     type Primitive: Copy;
     
-    /// Create a new instance with the given value
-    /// 
-    /// 用给定值创建新实例
-    fn new(val: Self::Primitive) -> Self;
-    
     /// Load the value with specified ordering
     /// 
     /// 使用指定的内存顺序加载值
@@ -47,17 +42,6 @@ pub trait AtomicElement: Send + Sync {
     /// 
     /// 交换值并返回旧值
     fn swap(&self, val: Self::Primitive, order: Ordering) -> Self::Primitive;
-    
-    /// Compare and exchange
-    /// 
-    /// 比较并交换
-    fn compare_exchange(
-        &self,
-        current: Self::Primitive,
-        new: Self::Primitive,
-        success: Ordering,
-        failure: Ordering,
-    ) -> Result<Self::Primitive, Self::Primitive>;
 }
 
 // Implement for common atomic types
@@ -68,35 +52,19 @@ macro_rules! impl_atomic_element {
         impl AtomicElement for $atomic {
             type Primitive = $primitive;
             
-            #[inline]
-            fn new(val: Self::Primitive) -> Self {
-                Self::new(val)
-            }
-            
-            #[inline]
+            #[inline(always)]
             fn load(&self, order: Ordering) -> Self::Primitive {
                 self.load(order)
             }
             
-            #[inline]
+            #[inline(always)]
             fn store(&self, val: Self::Primitive, order: Ordering) {
                 self.store(val, order);
             }
             
-            #[inline]
+            #[inline(always)]
             fn swap(&self, val: Self::Primitive, order: Ordering) -> Self::Primitive {
                 self.swap(val, order)
-            }
-            
-            #[inline]
-            fn compare_exchange(
-                &self,
-                current: Self::Primitive,
-                new: Self::Primitive,
-                success: Ordering,
-                failure: Ordering,
-            ) -> Result<Self::Primitive, Self::Primitive> {
-                self.compare_exchange(current, new, success, failure)
             }
         }
     };
@@ -301,7 +269,7 @@ impl<T: AtomicElement, const N: usize, const OVERWRITE: bool> AtomicRingBuf<T, N
     /// assert_eq!(buf_no.push(2, Ordering::Relaxed), Ok(()));
     /// assert_eq!(buf_no.push(3, Ordering::Relaxed), Err(3)); // Full
     /// ```
-    #[inline]
+    #[inline(always)]
     pub fn push(&self, value: T::Primitive, order: Ordering) -> <PushMarker<OVERWRITE> as PushDispatch<T, N, OVERWRITE>>::PushOutput
     where
         PushMarker<OVERWRITE>: PushDispatch<T, N, OVERWRITE>,
