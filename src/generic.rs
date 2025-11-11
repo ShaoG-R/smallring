@@ -382,15 +382,6 @@ impl<T, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
     /// 
     /// 如果有元素则返回 `Some(&T)`，如果缓冲区为空则返回 `None`
     /// 
-    /// # Safety
-    /// 
-    /// The returned reference is valid only as long as no other operations
-    /// are performed that might modify the buffer.
-    /// 
-    /// # 安全性
-    /// 
-    /// 返回的引用仅在未执行可能修改缓冲区的其他操作时有效。
-    /// 
     /// # Examples
     /// 
     /// ```
@@ -456,16 +447,6 @@ impl<T, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
     /// - `first` 包含初始连续数据
     /// - `second` 包含环绕的数据（可能为空）
     /// 
-    /// # Safety
-    /// 
-    /// The returned slices are valid only as long as no push operations occur.
-    /// In concurrent scenarios, the slices may become stale.
-    /// 
-    /// # 安全性
-    /// 
-    /// 返回的切片仅在未发生 push 操作时有效。
-    /// 在并发场景中，切片可能变得过时。
-    /// 
     /// # Examples
     /// 
     /// ```
@@ -530,16 +511,6 @@ impl<T, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
     /// The iterator yields references to elements in FIFO order (oldest to newest).
     /// 
     /// 迭代器按 FIFO 顺序（从最旧到最新）返回元素的引用。
-    /// 
-    /// # Safety
-    /// 
-    /// The iterator is valid only as long as no push operations occur.
-    /// In concurrent scenarios, the iterator may see inconsistent data.
-    /// 
-    /// # 安全性
-    /// 
-    /// 迭代器仅在未发生 push 操作时有效。
-    /// 在并发场景中，迭代器可能看到不一致的数据。
     /// 
     /// # Examples
     /// 
