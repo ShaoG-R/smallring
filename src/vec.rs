@@ -1,80 +1,80 @@
+use std::fmt;
 /// Fixed-capacity vector with stack/heap optimization
-/// 
+///
 /// 固定容量的向量，带有栈/堆优化
-/// 
+///
 /// This type provides a fixed-capacity vector that stores data on the stack
 /// when capacity is ≤ N, and on the heap when capacity > N.
 /// Unlike SmallVec, this type does not support dynamic resizing.
-/// 
+///
 /// 此类型提供固定容量的向量，当容量 ≤ N 时在栈上存储数据，
 /// 当容量 > N 时在堆上存储数据。与 SmallVec 不同，此类型不支持动态调整大小。
 use std::mem::MaybeUninit;
 use std::ops::{Index, IndexMut};
-use std::fmt;
 
 /// Fixed-capacity vector that optimizes for small sizes
-/// 
+///
 /// 为小尺寸优化的固定容量向量
-/// 
+///
 /// # Type Parameters
 /// - `T`: Element type
 /// - `N`: Stack capacity threshold (elements stored on stack when capacity ≤ N)
-/// 
+///
 /// # 类型参数
 /// - `T`: 元素类型
 /// - `N`: 栈容量阈值（当容量 ≤ N 时元素存储在栈上）
 pub struct FixedVec<T, const N: usize> {
     /// Storage backend
-    /// 
+    ///
     /// 存储后端
     storage: Storage<T, N>,
-    
+
     /// Current length
-    /// 
+    ///
     /// 当前长度
     len: usize,
-    
+
     /// Total capacity
-    /// 
+    ///
     /// 总容量
     capacity: usize,
 }
 
 /// Storage backend - either stack or heap
-/// 
+///
 /// 存储后端 - 栈或堆
 enum Storage<T, const N: usize> {
     /// Stack storage for capacity ≤ N
-    /// 
+    ///
     /// 容量 ≤ N 时的栈存储
     Stack([MaybeUninit<T>; N]),
-    
+
     /// Heap storage for capacity > N
-    /// 
+    ///
     /// 容量 > N 时的堆存储
     Heap(Box<[MaybeUninit<T>]>),
 }
 
 impl<T, const N: usize> FixedVec<T, N> {
     /// Create a new FixedVec with the specified capacity
-    /// 
+    ///
     /// 创建指定容量的新 FixedVec
-    /// 
+    ///
     /// If `capacity` ≤ N, uses stack storage.
     /// If `capacity` > N, uses heap storage.
-    /// 
+    ///
     /// 如果 `capacity` ≤ N，使用栈存储。
     /// 如果 `capacity` > N，使用堆存储。
-    /// 
+    ///
     /// # Parameters
     /// - `capacity`: The fixed capacity of the vector
-    /// 
+    ///
     /// # Returns
     /// A new FixedVec with the specified capacity and length 0
-    /// 
+    ///
     /// # 参数
     /// - `capacity`: 向量的固定容量
-    /// 
+    ///
     /// # 返回值
     /// 指定容量、长度为 0 的新 FixedVec
     #[inline]
@@ -94,49 +94,49 @@ impl<T, const N: usize> FixedVec<T, N> {
             }
             Storage::Heap(vec.into_boxed_slice())
         };
-        
+
         Self {
             storage,
             len: 0,
             capacity,
         }
     }
-    
+
     /// Get the capacity of the vector
-    /// 
+    ///
     /// 获取向量的容量
     #[inline]
     #[allow(unused)]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
-    
+
     /// Get the current length of the vector
-    /// 
+    ///
     /// 获取向量的当前长度
     #[inline]
     #[allow(unused)]
     pub fn len(&self) -> usize {
         self.len
     }
-    
+
     /// Check if the vector is empty
-    /// 
+    ///
     /// 检查向量是否为空
     #[inline]
     #[allow(unused)]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
-    
+
     /// Set the length of the vector
-    /// 
+    ///
     /// 设置向量的长度
-    /// 
+    ///
     /// # Safety
     /// - `new_len` must be ≤ capacity
     /// - Elements in 0..new_len must be properly initialized if new_len > old len
-    /// 
+    ///
     /// # 安全性
     /// - `new_len` 必须 ≤ capacity
     /// - 如果 new_len > old len，则 0..new_len 中的元素必须正确初始化
@@ -145,14 +145,14 @@ impl<T, const N: usize> FixedVec<T, N> {
         debug_assert!(new_len <= self.capacity);
         self.len = new_len;
     }
-    
+
     /// Get a pointer to the beginning of the buffer
-    /// 
+    ///
     /// 获取指向缓冲区开头的指针
-    /// 
+    ///
     /// # Returns
     /// A const pointer to the first element (MaybeUninit<T>)
-    /// 
+    ///
     /// # 返回值
     /// 指向第一个元素的常量指针（MaybeUninit<T>）
     #[inline]
@@ -162,14 +162,14 @@ impl<T, const N: usize> FixedVec<T, N> {
             Storage::Heap(boxed) => boxed.as_ptr(),
         }
     }
-    
+
     /// Get a pointer to the element at the specified index (unchecked, fast path)
-    /// 
+    ///
     /// 获取指定索引处元素的指针（无检查，快速路径）
-    /// 
+    ///
     /// # Safety
     /// - `index` must be < capacity
-    /// 
+    ///
     /// # 安全性
     /// - `index` 必须 < capacity
     #[inline(always)]
@@ -179,14 +179,14 @@ impl<T, const N: usize> FixedVec<T, N> {
             Storage::Heap(boxed) => unsafe { boxed.as_ptr().add(index) },
         }
     }
-    
+
     /// Get a mutable pointer to the element at the specified index (unchecked, fast path)
-    /// 
+    ///
     /// 获取指定索引处元素的可变指针（无检查，快速路径）
-    /// 
+    ///
     /// # Safety
     /// - `index` must be < capacity
-    /// 
+    ///
     /// # 安全性
     /// - `index` 必须 < capacity
     #[inline(always)]
@@ -196,14 +196,14 @@ impl<T, const N: usize> FixedVec<T, N> {
             Storage::Heap(boxed) => unsafe { boxed.as_mut_ptr().add(index) },
         }
     }
-    
+
     /// Get a pointer to the element at the specified index
-    /// 
+    ///
     /// 获取指定索引处元素的指针
-    /// 
+    ///
     /// # Safety
     /// - `index` must be < capacity
-    /// 
+    ///
     /// # 安全性
     /// - `index` 必须 < capacity
     #[inline]
@@ -211,14 +211,14 @@ impl<T, const N: usize> FixedVec<T, N> {
         debug_assert!(index < self.capacity);
         unsafe { self.get_unchecked_ptr(index) }
     }
-    
+
     /// Get a mutable pointer to the element at the specified index
-    /// 
+    ///
     /// 获取指定索引处元素的可变指针
-    /// 
+    ///
     /// # Safety
     /// - `index` must be < capacity
-    /// 
+    ///
     /// # 安全性
     /// - `index` 必须 < capacity
     #[inline]
@@ -230,7 +230,7 @@ impl<T, const N: usize> FixedVec<T, N> {
 
 impl<T, const N: usize> Index<usize> for FixedVec<T, N> {
     type Output = MaybeUninit<T>;
-    
+
     #[inline]
     fn index(&self, index: usize) -> &Self::Output {
         assert!(index < self.capacity, "index out of bounds");
@@ -248,7 +248,7 @@ impl<T, const N: usize> IndexMut<usize> for FixedVec<T, N> {
 
 // Note: FixedVec does NOT implement Drop because it stores MaybeUninit<T>.
 // The caller is responsible for properly dropping initialized elements.
-// 
+//
 // 注意：FixedVec 不实现 Drop，因为它存储 MaybeUninit<T>。
 // 调用者负责正确释放已初始化的元素。
 
@@ -257,10 +257,13 @@ impl<T: fmt::Debug, const N: usize> fmt::Debug for FixedVec<T, N> {
         f.debug_struct("FixedVec")
             .field("len", &self.len)
             .field("capacity", &self.capacity)
-            .field("storage", match &self.storage {
-                Storage::Stack(_) => &"Stack",
-                Storage::Heap(_) => &"Heap",
-            })
+            .field(
+                "storage",
+                match &self.storage {
+                    Storage::Stack(_) => &"Stack",
+                    Storage::Heap(_) => &"Heap",
+                },
+            )
             .finish()
     }
 }
@@ -273,7 +276,7 @@ unsafe impl<T: Sync, const N: usize> Sync for FixedVec<T, N> {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_small_capacity_stack() {
         // Test stack allocation (capacity ≤ 32)
@@ -283,7 +286,7 @@ mod tests {
         assert!(vec.is_empty());
         assert!(matches!(vec.storage, Storage::Stack(_)));
     }
-    
+
     #[test]
     fn test_large_capacity_heap() {
         // Test heap allocation (capacity > 32)
@@ -293,7 +296,7 @@ mod tests {
         assert!(vec.is_empty());
         assert!(matches!(vec.storage, Storage::Heap(_)));
     }
-    
+
     #[test]
     fn test_exact_threshold() {
         // Test exact threshold (capacity = 32)
@@ -301,7 +304,7 @@ mod tests {
         assert_eq!(vec.capacity(), 32);
         assert!(matches!(vec.storage, Storage::Stack(_)));
     }
-    
+
     #[test]
     fn test_set_len() {
         let mut vec: FixedVec<i32, 32> = FixedVec::with_capacity(16);
@@ -311,65 +314,65 @@ mod tests {
         assert_eq!(vec.len(), 10);
         assert!(!vec.is_empty());
     }
-    
+
     #[test]
     fn test_index_access() {
         let mut vec: FixedVec<i32, 32> = FixedVec::with_capacity(8);
-        
+
         unsafe {
             // Write to indices
             vec[0].as_mut_ptr().write(42);
             vec[1].as_mut_ptr().write(99);
             vec.set_len(2);
-            
+
             // Read from indices
             assert_eq!(*vec[0].as_ptr(), 42);
             assert_eq!(*vec[1].as_ptr(), 99);
         }
     }
-    
+
     #[test]
     fn test_index_mut() {
         let mut vec: FixedVec<i32, 32> = FixedVec::with_capacity(8);
-        
+
         unsafe {
             vec[0].as_mut_ptr().write(10);
             vec[1].as_mut_ptr().write(20);
             vec.set_len(2);
-            
+
             // Modify through mutable index
             *vec[0].as_mut_ptr() = 100;
-            
+
             assert_eq!(*vec[0].as_ptr(), 100);
             assert_eq!(*vec[1].as_ptr(), 20);
         }
     }
-    
+
     #[test]
     #[should_panic(expected = "index out of bounds")]
     fn test_index_out_of_bounds() {
         let vec: FixedVec<i32, 32> = FixedVec::with_capacity(8);
         let _ = &vec[10];
     }
-    
+
     // Note: test_drop_cleanup has been removed because FixedVec does not implement Drop.
     // FixedVec stores MaybeUninit<T> and the caller is responsible for managing element lifetimes.
-    // 
+    //
     // 注意：test_drop_cleanup 已移除，因为 FixedVec 不实现 Drop。
     // FixedVec 存储 MaybeUninit<T>，调用者负责管理元素生命周期。
-    
+
     #[test]
     fn test_stack_vs_heap() {
         // Verify that small capacity uses less memory (stack)
         let stack_vec: FixedVec<u8, 32> = FixedVec::with_capacity(32);
         let heap_vec: FixedVec<u8, 32> = FixedVec::with_capacity(64);
-        
+
         // Stack storage should use inline array
         assert!(matches!(stack_vec.storage, Storage::Stack(_)));
         // Heap storage should use boxed slice
         assert!(matches!(heap_vec.storage, Storage::Heap(_)));
     }
-    
+
     #[test]
     fn test_zero_capacity() {
         let vec: FixedVec<i32, 32> = FixedVec::with_capacity(0);
@@ -378,4 +381,3 @@ mod tests {
         assert!(vec.is_empty());
     }
 }
-
