@@ -664,6 +664,14 @@ impl<T, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
     }
 }
 
+impl<T: Clone, const N: usize, const OVERWRITE: bool> Clone for RingBuf<T, N, OVERWRITE> {
+    fn clone(&self) -> Self {
+        Self {
+            core: self.core.clone(),
+        }
+    }
+}
+
 impl<T: Copy, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
     /// Push multiple elements from a slice into the buffer
     ///
@@ -1325,5 +1333,26 @@ mod tests {
 
         let values: Vec<i32> = buf.iter().copied().collect();
         assert_eq!(values, vec![40, 50, 60, 70]);
+    }
+
+    #[test]
+    fn test_clone() {
+        let mut buf: RingBuf<i32, 32, true> = RingBuf::new(4);
+        buf.push(1);
+        buf.push(2);
+        buf.push(3);
+
+        let buf_clone = buf.clone();
+
+        assert_eq!(buf.len(), buf_clone.len());
+        assert_eq!(buf.capacity(), buf_clone.capacity());
+
+        let values: Vec<_> = buf_clone.iter().copied().collect();
+        assert_eq!(values, vec![1, 2, 3]);
+
+        // Modify original, clone should stay same
+        buf.push(4);
+        assert_eq!(buf.len(), 4);
+        assert_eq!(buf_clone.len(), 3);
     }
 }

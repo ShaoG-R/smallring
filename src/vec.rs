@@ -246,6 +246,23 @@ impl<T, const N: usize> IndexMut<usize> for FixedVec<T, N> {
     }
 }
 
+impl<T: Clone, const N: usize> Clone for FixedVec<T, N> {
+    fn clone(&self) -> Self {
+        let mut new_vec = Self::with_capacity(self.capacity);
+        unsafe {
+            for i in 0..self.len {
+                let val_uninit = &*self.get_unchecked_ptr(i);
+                let val_ref = val_uninit.assume_init_ref();
+                new_vec
+                    .get_unchecked_mut_ptr(i)
+                    .write(MaybeUninit::new(val_ref.clone()));
+            }
+            new_vec.set_len(self.len);
+        }
+        new_vec
+    }
+}
+
 // Note: FixedVec does NOT implement Drop because it stores MaybeUninit<T>.
 // The caller is responsible for properly dropping initialized elements.
 //

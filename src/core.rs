@@ -416,6 +416,40 @@ impl<T: Copy, const N: usize> RingBufCore<T, N> {
     }
 }
 
+impl<T: Clone, const N: usize> Clone for RingBufCore<T, N> {
+    fn clone(&self) -> Self {
+        let capacity = self.capacity;
+        let mask = self.mask;
+        let read = self.read_idx.load(Ordering::Relaxed);
+        let write = self.write_idx.load(Ordering::Relaxed);
+
+        let mut new_buffer = FixedVec::with_capacity(capacity);
+        unsafe {
+            // RingBufCore uses the full capacity of the FixedVec
+            new_buffer.set_len(capacity);
+
+            // Clone only valid elements
+            let mut i = read;
+            while i != write {
+                let idx = i & mask;
+                let val = self.peek_at(idx);
+                // Write T into MaybeUninit<T> slot by casting pointer
+                let ptr = new_buffer.get_unchecked_mut_ptr(idx).cast::<T>();
+                ptr.write(val.clone());
+                i = i.wrapping_add(1);
+            }
+        }
+
+        Self {
+            buffer: new_buffer,
+            capacity,
+            mask,
+            write_idx: AtomicUsize::new(write),
+            read_idx: AtomicUsize::new(read),
+        }
+    }
+}
+
 impl<T: fmt::Debug, const N: usize> fmt::Debug for RingBufCore<T, N> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RingBufCore")
