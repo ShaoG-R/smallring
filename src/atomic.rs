@@ -10,8 +10,18 @@
 //! 与通用环形缓冲区不同，原子环形缓冲区不移动值，而是通过原子 load/store 操作进行读写。
 
 use super::core::RingBufCore;
+use crate::shim::atomic::Ordering;
 use std::fmt;
-use std::sync::atomic::Ordering;
+
+#[cfg(feature = "loom")]
+fn backoff() {
+    loom::thread::yield_now();
+}
+
+#[cfg(not(feature = "loom"))]
+fn backoff() {
+    std::hint::spin_loop();
+}
 
 /// Trait for types that support atomic operations
 ///
@@ -45,7 +55,7 @@ pub trait AtomicElement: Send + Sync {
 }
 
 // Implement for common atomic types
-use std::sync::atomic::{
+use crate::shim::atomic::{
     AtomicBool, AtomicI8, AtomicI16, AtomicI32, AtomicI64, AtomicIsize, AtomicU8, AtomicU16,
     AtomicU32, AtomicU64, AtomicUsize,
 };
@@ -121,11 +131,13 @@ impl<T: AtomicElement, const N: usize> PushDispatch<T, N, true> for PushMarker<t
         value: T::Primitive,
         order: Ordering,
     ) -> Self::PushOutput {
+        // Reservation phase
         let write = ringbuf.core.write_idx().fetch_add(1, Ordering::Relaxed);
         let read = ringbuf.core.read_idx().load(Ordering::Acquire);
 
+        // Check if we need to overwrite
         if write.wrapping_sub(read) >= ringbuf.core.capacity() {
-            // Buffer was full - overwrite and advance read index
+            // Buffer was full - attempt to advance read index
             ringbuf
                 .core
                 .read_idx()
@@ -142,7 +154,18 @@ impl<T: AtomicElement, const N: usize> PushDispatch<T, N, true> for PushMarker<t
                 let slot = ringbuf.core.peek_at(index);
                 slot.swap(value, order)
             };
-            Some(old_value)
+
+            // Commit phase: wait for our turn
+            loop {
+                let commit = ringbuf.write_commit.load(Ordering::Acquire);
+                if commit == write {
+                    ringbuf
+                        .write_commit
+                        .store(write.wrapping_add(1), Ordering::Release);
+                    return Some(old_value);
+                }
+                backoff();
+            }
         } else {
             // Buffer not full - just store
             let index = write & ringbuf.core.mask();
@@ -150,7 +173,18 @@ impl<T: AtomicElement, const N: usize> PushDispatch<T, N, true> for PushMarker<t
                 let slot = ringbuf.core.peek_at(index);
                 slot.store(value, order);
             }
-            None
+
+            // Commit phase: wait for our turn
+            loop {
+                let commit = ringbuf.write_commit.load(Ordering::Acquire);
+                if commit == write {
+                    ringbuf
+                        .write_commit
+                        .store(write.wrapping_add(1), Ordering::Release);
+                    return None;
+                }
+                backoff();
+            }
         }
     }
 }
@@ -167,21 +201,46 @@ impl<T: AtomicElement, const N: usize> PushDispatch<T, N, false> for PushMarker<
         value: T::Primitive,
         order: Ordering,
     ) -> Self::PushOutput {
-        let write = ringbuf.core.write_idx().fetch_add(1, Ordering::Relaxed);
-        let read = ringbuf.core.read_idx().load(Ordering::Acquire);
+        loop {
+            let write = ringbuf.core.write_idx().load(Ordering::Relaxed);
+            let read = ringbuf.core.read_idx().load(Ordering::Acquire);
 
-        if write.wrapping_sub(read) >= ringbuf.core.capacity() {
-            // Full - revert write index and return error
-            ringbuf.core.write_idx().fetch_sub(1, Ordering::Relaxed);
-            Err(value)
-        } else {
-            // Not full - store value
-            let index = write & ringbuf.core.mask();
-            unsafe {
-                let slot = ringbuf.core.peek_at(index);
-                slot.store(value, order);
+            if write.wrapping_sub(read) >= ringbuf.core.capacity() {
+                return Err(value);
             }
-            Ok(())
+
+            // Attempt to reserve a slot
+            if ringbuf
+                .core
+                .write_idx()
+                .compare_exchange(
+                    write,
+                    write.wrapping_add(1),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                // Reservation successful
+                let index = write & ringbuf.core.mask();
+                unsafe {
+                    let slot = ringbuf.core.peek_at(index);
+                    slot.store(value, order);
+                }
+
+                // Commit phase: wait for our turn
+                loop {
+                    let commit = ringbuf.write_commit.load(Ordering::Acquire);
+                    if commit == write {
+                        ringbuf
+                            .write_commit
+                            .store(write.wrapping_add(1), Ordering::Release);
+                        return Ok(());
+                    }
+                    backoff();
+                }
+            }
+            backoff();
         }
     }
 }
@@ -201,6 +260,7 @@ impl<T: AtomicElement, const N: usize> PushDispatch<T, N, false> for PushMarker<
 /// - `OVERWRITE`: 覆盖模式（true = 覆盖最旧的，false = 满时拒绝）
 pub struct AtomicRingBuf<T: AtomicElement, const N: usize, const OVERWRITE: bool = true> {
     core: RingBufCore<T, N>,
+    write_commit: AtomicUsize,
 }
 
 impl<T: AtomicElement, const N: usize, const OVERWRITE: bool> AtomicRingBuf<T, N, OVERWRITE> {
@@ -208,9 +268,27 @@ impl<T: AtomicElement, const N: usize, const OVERWRITE: bool> AtomicRingBuf<T, N
     ///
     /// 创建新的原子环形缓冲区
     #[inline]
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize) -> Self
+    where
+        T: Default,
+    {
+        let uninit = Self::new_uninit(capacity);
+        unsafe {
+            for i in 0..uninit.core.capacity() {
+                uninit.core.write_at(i, T::default());
+            }
+        }
+        uninit
+    }
+
+    /// Create a new atomic ring buffer with uninitialized elements
+    ///
+    /// 创建新的原子环形缓冲区，元素未初始化
+    #[inline]
+    pub fn new_uninit(capacity: usize) -> Self {
         Self {
             core: RingBufCore::new(capacity),
+            write_commit: AtomicUsize::new(0),
         }
     }
 
@@ -227,7 +305,9 @@ impl<T: AtomicElement, const N: usize, const OVERWRITE: bool> AtomicRingBuf<T, N
     /// 获取当前长度
     #[inline]
     pub fn len(&self) -> usize {
-        self.core.len()
+        let commit = self.write_commit.load(Ordering::Acquire);
+        let read = self.core.read_idx().load(Ordering::Acquire);
+        commit.wrapping_sub(read).min(self.core.capacity())
     }
 
     /// Check if empty
@@ -235,7 +315,9 @@ impl<T: AtomicElement, const N: usize, const OVERWRITE: bool> AtomicRingBuf<T, N
     /// 检查是否为空
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.core.is_empty()
+        let commit = self.write_commit.load(Ordering::Acquire);
+        let read = self.core.read_idx().load(Ordering::Acquire);
+        commit == read
     }
 
     /// Check if full
@@ -296,9 +378,9 @@ impl<T: AtomicElement, const N: usize, const OVERWRITE: bool> AtomicRingBuf<T, N
     #[inline]
     pub fn pop(&self, order: Ordering) -> Option<T::Primitive> {
         let read = self.core.read_idx().load(Ordering::Relaxed);
-        let write = self.core.write_idx().load(Ordering::Acquire);
+        let commit = self.write_commit.load(Ordering::Acquire);
 
-        if read == write {
+        if read == commit {
             return None;
         }
 
@@ -320,9 +402,9 @@ impl<T: AtomicElement, const N: usize, const OVERWRITE: bool> AtomicRingBuf<T, N
     #[inline]
     pub fn peek(&self, order: Ordering) -> Option<T::Primitive> {
         let read = self.core.read_idx().load(Ordering::Acquire);
-        let write = self.core.write_idx().load(Ordering::Acquire);
+        let commit = self.write_commit.load(Ordering::Acquire);
 
-        if read == write {
+        if read == commit {
             return None;
         }
 
@@ -372,8 +454,8 @@ impl<T: AtomicElement, const N: usize, const OVERWRITE: bool> AtomicRingBuf<T, N
     /// ```
     #[inline]
     pub fn clear(&self) {
-        let write = self.core.write_idx().load(Ordering::Acquire);
-        self.core.read_idx().store(write, Ordering::Release);
+        let commit = self.write_commit.load(Ordering::Acquire);
+        self.core.read_idx().store(commit, Ordering::Release);
     }
 
     /// Read all valid elements from the buffer
@@ -404,9 +486,9 @@ impl<T: AtomicElement, const N: usize, const OVERWRITE: bool> AtomicRingBuf<T, N
     #[inline]
     pub fn read_all(&self, order: Ordering) -> Vec<T::Primitive> {
         let read = self.core.read_idx().load(Ordering::Acquire);
-        let write = self.core.write_idx().load(Ordering::Acquire);
+        let commit = self.write_commit.load(Ordering::Acquire);
 
-        let len = write.wrapping_sub(read).min(self.core.capacity());
+        let len = commit.wrapping_sub(read).min(self.core.capacity());
         let mut values = Vec::with_capacity(len);
 
         for i in 0..len {
@@ -450,8 +532,8 @@ impl<T: AtomicElement, const N: usize, const OVERWRITE: bool> AtomicRingBuf<T, N
     #[inline]
     pub fn iter(&self) -> AtomicIter<'_, T, N, OVERWRITE> {
         let read = self.core.read_idx().load(Ordering::Acquire);
-        let write = self.core.write_idx().load(Ordering::Acquire);
-        let len = write.wrapping_sub(read).min(self.core.capacity());
+        let commit = self.write_commit.load(Ordering::Acquire);
+        let len = commit.wrapping_sub(read).min(self.core.capacity());
 
         AtomicIter {
             ringbuf: self,
@@ -627,7 +709,7 @@ unsafe impl<T: AtomicElement, const N: usize, const OVERWRITE: bool> Sync
 {
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "loom")))]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};

@@ -118,7 +118,11 @@ pub mod spsc;
 // Internal modules
 // 内部模块
 mod core;
+pub(crate) mod shim;
 mod vec;
 
-#[cfg(test)]
-mod tests;
+#[cfg(all(test, not(feature = "loom")))]
+mod tests {
+    pub mod atomic;
+    pub mod generic;
+}

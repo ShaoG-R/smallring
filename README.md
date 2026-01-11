@@ -25,7 +25,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-smallring = "0.1"
+smallring = "0.2"
 ```
 
 ## Quick Start

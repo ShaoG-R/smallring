@@ -25,7 +25,7 @@
 
 ```toml
 [dependencies]
-smallring = "0.1"
+smallring = "0.2"
 ```
 
 ## 快速开始

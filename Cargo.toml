@@ -1,6 +1,6 @@
 [package]
 name = "smallring"
-version = "0.1.7"
+version = "0.2.0"
 edition = "2024"
 authors = ["ShaoG <shaog.rs@gmail.com>"]
 description = "High-performance ring buffer with automatic stack/heap optimization | 高性能环形缓冲区，支持栈/堆自动优化"
@@ -14,10 +14,16 @@ readme = "README.md"
 rust-version = "1.87"
 
 [dependencies]
+loom = { version = "0.7.2", features = ["futures"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.7.0", features = ["async_tokio"] }
 rtrb = "0.3.2"
+
+[features]
+default = []
+loom = ["dep:loom"]
+
 
 [[bench]]
 name = "spsc_benchmark"

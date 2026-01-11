@@ -842,7 +842,7 @@ unsafe impl<T: Send, const N: usize, const OVERWRITE: bool> Sync for RingBuf<T, 
 // Any remaining elements when RingBuf is dropped will leak.
 // For proper cleanup, call clear() before dropping.
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "loom")))]
 mod tests {
     use super::*;
 

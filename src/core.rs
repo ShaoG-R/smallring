@@ -13,9 +13,9 @@
 //! - 批量操作辅助（带环绕处理的切片拷贝）
 
 use super::vec::FixedVec;
+use crate::shim::atomic::{AtomicUsize, Ordering};
 use std::fmt;
 use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Core ring buffer storage structure
 ///
@@ -489,7 +489,7 @@ pub fn round_to_power_of_two(capacity: usize) -> usize {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "loom")))]
 mod tests {
     use super::*;
 

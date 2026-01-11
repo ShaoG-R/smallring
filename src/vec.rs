@@ -1,14 +1,14 @@
+//! Fixed-capacity vector with stack/heap optimization
+//!
+//! 固定容量的向量，带有栈/堆优化
+//!
+//! This type provides a fixed-capacity vector that stores data on the stack
+//! when capacity is ≤ N, and on the heap when capacity > N.
+//! Unlike SmallVec, this type does not support dynamic resizing.
+//!
+//! 此类型提供固定容量的向量，当容量 ≤ N 时在栈上存储数据，
+//! 当容量 > N 时在堆上存储数据。与 SmallVec 不同，此类型不支持动态调整大小。
 use std::fmt;
-/// Fixed-capacity vector with stack/heap optimization
-///
-/// 固定容量的向量，带有栈/堆优化
-///
-/// This type provides a fixed-capacity vector that stores data on the stack
-/// when capacity is ≤ N, and on the heap when capacity > N.
-/// Unlike SmallVec, this type does not support dynamic resizing.
-///
-/// 此类型提供固定容量的向量，当容量 ≤ N 时在栈上存储数据，
-/// 当容量 > N 时在堆上存储数据。与 SmallVec 不同，此类型不支持动态调整大小。
 use std::mem::MaybeUninit;
 use std::ops::{Index, IndexMut};
 
