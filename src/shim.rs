@@ -5,7 +5,7 @@
 
 #[cfg(not(feature = "loom"))]
 pub mod atomic {
-    pub use std::sync::atomic::*;
+    pub use core::sync::atomic::*;
 }
 
 #[cfg(feature = "loom")]
@@ -15,7 +15,7 @@ pub mod atomic {
 
 #[cfg(not(feature = "loom"))]
 pub mod sync {
-    pub use std::sync::Arc;
+    pub use alloc::sync::Arc;
 }
 
 #[cfg(feature = "loom")]

@@ -11,7 +11,8 @@
 
 use super::core::RingBufCore;
 use crate::shim::atomic::Ordering;
-use std::fmt;
+use alloc::vec::Vec;
+use core::fmt;
 
 #[cfg(feature = "loom")]
 fn backoff() {
@@ -20,7 +21,7 @@ fn backoff() {
 
 #[cfg(not(feature = "loom"))]
 fn backoff() {
-    std::hint::spin_loop();
+    core::hint::spin_loop();
 }
 
 /// Trait for types that support atomic operations

@@ -1,8 +1,16 @@
+//! High-performance SPSC Ring Buffer with stack/heap optimization
+//!
+//! 基于栈/堆优化的高性能 SPSC 环形缓冲区
+//!
+//! This implementation uses FixedVec to store data on the stack for small capacities (≤32),
+//! avoiding heap allocation overhead and improving `new()` performance.
+//!
+//! 此实现使用 FixedVec 在栈上存储小容量数据（≤32），避免堆分配开销，提升 `new()` 性能。
 use super::core::RingBufCore;
 use crate::shim::atomic::Ordering;
 use crate::shim::sync::Arc;
-use std::fmt;
-use std::num::NonZero;
+use core::fmt;
+use core::num::NonZero;
 
 /// Ring buffer error for push operations
 ///

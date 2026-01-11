@@ -14,8 +14,8 @@
 
 use super::vec::FixedVec;
 use crate::shim::atomic::{AtomicUsize, Ordering};
-use std::fmt;
-use std::ptr;
+use core::fmt;
+use core::ptr;
 
 /// Core ring buffer storage structure
 ///

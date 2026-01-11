@@ -108,6 +108,9 @@
 //!
 //! 本库内部使用 unsafe 代码以提升性能，但提供完全安全的 API。
 //! 所有 unsafe 块都经过仔细文档化和正确性审查。
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
 
 // Public modules
 // 公开模块

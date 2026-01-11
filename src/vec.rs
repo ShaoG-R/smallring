@@ -8,9 +8,9 @@
 //!
 //! 此类型提供固定容量的向量，当容量 ≤ N 时在栈上存储数据，
 //! 当容量 > N 时在堆上存储数据。与 SmallVec 不同，此类型不支持动态调整大小。
-use std::fmt;
-use std::mem::MaybeUninit;
-use std::ops::{Index, IndexMut};
+use core::fmt;
+use core::mem::MaybeUninit;
+use core::ops::{Index, IndexMut};
 
 /// Fixed-capacity vector that optimizes for small sizes
 ///
@@ -52,7 +52,7 @@ enum Storage<T, const N: usize> {
     /// Heap storage for capacity > N
     ///
     /// 容量 > N 时的堆存储
-    Heap(Box<[MaybeUninit<T>]>),
+    Heap(alloc::boxed::Box<[MaybeUninit<T>]>),
 }
 
 impl<T, const N: usize> FixedVec<T, N> {
@@ -88,7 +88,7 @@ impl<T, const N: usize> FixedVec<T, N> {
         } else {
             // Use heap storage
             // 使用堆存储
-            let mut vec = Vec::with_capacity(capacity);
+            let mut vec = alloc::vec::Vec::with_capacity(capacity);
             unsafe {
                 vec.set_len(capacity);
             }

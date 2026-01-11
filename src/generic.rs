@@ -17,15 +17,15 @@
 //! - 非覆盖模式（满时拒绝写入）
 
 use super::core::RingBufCore;
-use std::fmt;
-use std::sync::atomic::Ordering;
+use crate::shim::atomic::Ordering;
+use core::fmt;
 
 /// Iterator over ring buffer elements
 ///
 /// 环形缓冲区元素的迭代器
 pub struct Iter<'a, T> {
-    first: std::slice::Iter<'a, T>,
-    second: std::slice::Iter<'a, T>,
+    first: core::slice::Iter<'a, T>,
+    second: core::slice::Iter<'a, T>,
 }
 
 impl<'a, T> Iterator for Iter<'a, T> {
@@ -60,8 +60,8 @@ impl<'a, T> DoubleEndedIterator for Iter<'a, T> {
 ///
 /// 环形缓冲区元素的可变迭代器
 pub struct IterMut<'a, T> {
-    first: std::slice::IterMut<'a, T>,
-    second: std::slice::IterMut<'a, T>,
+    first: core::slice::IterMut<'a, T>,
+    second: core::slice::IterMut<'a, T>,
 }
 
 impl<'a, T> Iterator for IterMut<'a, T> {
@@ -484,24 +484,24 @@ impl<T, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
                 if len == self.core.capacity() {
                     // Full buffer - return two slices
                     let first_len = self.core.capacity() - read_idx;
-                    let first = std::slice::from_raw_parts(buffer_ptr.add(read_idx), first_len);
+                    let first = core::slice::from_raw_parts(buffer_ptr.add(read_idx), first_len);
                     let second = if read_idx > 0 {
-                        std::slice::from_raw_parts(buffer_ptr, read_idx)
+                        core::slice::from_raw_parts(buffer_ptr, read_idx)
                     } else {
                         &[]
                     };
                     (first, second)
                 } else {
                     // Data is contiguous
-                    let slice = std::slice::from_raw_parts(buffer_ptr.add(read_idx), len);
+                    let slice = core::slice::from_raw_parts(buffer_ptr.add(read_idx), len);
                     (slice, &[])
                 }
             } else {
                 // Data wraps around
                 let first_len = self.core.capacity() - read_idx;
                 let second_len = len - first_len;
-                let first = std::slice::from_raw_parts(buffer_ptr.add(read_idx), first_len);
-                let second = std::slice::from_raw_parts(buffer_ptr, second_len);
+                let first = core::slice::from_raw_parts(buffer_ptr.add(read_idx), first_len);
+                let second = core::slice::from_raw_parts(buffer_ptr, second_len);
                 (first, second)
             }
         }
@@ -605,24 +605,25 @@ impl<T, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
                 if len == self.core.capacity() {
                     // Full buffer - return two slices
                     let first_len = self.core.capacity() - read_idx;
-                    let first = std::slice::from_raw_parts_mut(buffer_ptr.add(read_idx), first_len);
+                    let first =
+                        core::slice::from_raw_parts_mut(buffer_ptr.add(read_idx), first_len);
                     let second = if read_idx > 0 {
-                        std::slice::from_raw_parts_mut(buffer_ptr, read_idx)
+                        core::slice::from_raw_parts_mut(buffer_ptr, read_idx)
                     } else {
                         &mut []
                     };
                     (first, second)
                 } else {
                     // Data is contiguous
-                    let slice = std::slice::from_raw_parts_mut(buffer_ptr.add(read_idx), len);
+                    let slice = core::slice::from_raw_parts_mut(buffer_ptr.add(read_idx), len);
                     (slice, &mut [])
                 }
             } else {
                 // Data wraps around
                 let first_len = self.core.capacity() - read_idx;
                 let second_len = len - first_len;
-                let first = std::slice::from_raw_parts_mut(buffer_ptr.add(read_idx), first_len);
-                let second = std::slice::from_raw_parts_mut(buffer_ptr, second_len);
+                let first = core::slice::from_raw_parts_mut(buffer_ptr.add(read_idx), first_len);
+                let second = core::slice::from_raw_parts_mut(buffer_ptr, second_len);
                 (first, second)
             }
         }
@@ -759,7 +760,7 @@ impl<T: Copy, const N: usize, const OVERWRITE: bool> RingBuf<T, N, OVERWRITE> {
                 for i in 0..overwrite_count {
                     let idx = (write.wrapping_add(value_offset).wrapping_add(i)) & self.core.mask();
                     let ptr = self.core.buffer_ptr_at(idx) as *mut T;
-                    std::ptr::drop_in_place(ptr);
+                    core::ptr::drop_in_place(ptr);
                 }
             }
         }

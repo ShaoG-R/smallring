@@ -18,6 +18,7 @@ A collection of high-performance lock-free ring buffer implementations with auto
 - **Zero Copy** - Data is moved directly without extra copying
 - **Configurable Overwrite** - Generic module supports compile-time overwrite mode selection
 - **Power-of-2 Capacity** - Automatic rounding for efficient modulo operations
+- **No_std Support** - Supports `no_std` environments (requires `alloc`)
 
 ## Installation
 
