@@ -202,8 +202,10 @@ impl<T: AtomicElement, const N: usize> PushDispatch<T, N, false> for PushMarker<
         order: Ordering,
     ) -> Self::PushOutput {
         loop {
-            let write = ringbuf.core.write_idx().load(Ordering::Relaxed);
+            // Load read index first to ensure we don't see a "future" read index
+            // combined with a "past" write index, which would cause false "full" detection.
             let read = ringbuf.core.read_idx().load(Ordering::Acquire);
+            let write = ringbuf.core.write_idx().load(Ordering::Relaxed);
 
             if write.wrapping_sub(read) >= ringbuf.core.capacity() {
                 return Err(value);
